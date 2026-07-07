@@ -19,6 +19,14 @@ const defaultAssignments = [
     description: "Prepare presentation slides",
     status: "completed",
   },
+  {
+    id: "3",
+    title: "Math Homework",
+    subject: "Math",
+    deadline: "2026-07-15",
+    description: "Complete exercises from chapter 5",
+    status: "pending",
+  }
 ];
 
 export default function App() {

@@ -8,6 +8,10 @@ export default function AssignmentDetailsScreen({
 }) {
   const { assignment } = route.params;
 
+  const goToHome = () => {
+    navigation.navigate("MainTabs", { screen: "Home" });
+  };
+
   const handleDelete = () => {
     Alert.alert(
       "Delete Assignment",
@@ -19,7 +23,7 @@ export default function AssignmentDetailsScreen({
           style: "destructive",
           onPress: () => {
             deleteAssignment(assignment.id);
-            navigation.goBack();
+            navigation.navigate("MainTabs", { screen: "Home" });
           },
         },
       ]
@@ -28,7 +32,7 @@ export default function AssignmentDetailsScreen({
 
   const handleToggleStatus = () => {
     toggleAssignmentStatus(assignment.id);
-    navigation.goBack();
+    navigation.navigate("MainTabs", { screen: "Home" });
   };
 
   return (
@@ -70,6 +74,10 @@ export default function AssignmentDetailsScreen({
 
       <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
         <Text style={styles.buttonText}>Delete Assignment</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.homeButton} onPress={goToHome}>
+        <Text style={styles.homeButtonText}>Back to Home</Text>
       </TouchableOpacity>
     </View>
   );
@@ -126,6 +134,18 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     borderRadius: 12,
     alignItems: "center",
+    marginBottom: 12,
+  },
+  homeButton: {
+    backgroundColor: "#0f172a",
+    paddingVertical: 15,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  homeButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
   },
   buttonText: {
     color: "#fff",
