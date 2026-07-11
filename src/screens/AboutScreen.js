@@ -35,7 +35,7 @@ export default function AboutScreen() {
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Developer</Text>
-        <Text style={styles.text}>Developed by: Mehedi, Alvi, Rohan, Arpon, Tamim</Text>
+        <Text style={styles.text}>Developed by: Mehedi, Alvi, Tripal, Rohan, Arpon</Text>
         <Text style={styles.text}>Department: Computer Science & Technology</Text>
         <Text style={styles.text}>Project Type: College Mobile App Project</Text>
       </View>
