@@ -14,7 +14,7 @@ const FEATURES = [
 
 const TECH_STACK = ["React Native", "Expo", "React Navigation", "AsyncStorage"];
 
-const TEAM = ["Mehedi", "Alvi", "Tripal", "Rohan", "Arpon"];
+const TEAM = ["Mehedi", "Arpon", "Ali Hamza", "Tripal", "Alvi"];
 
 export default function AboutScreen() {
   return (
