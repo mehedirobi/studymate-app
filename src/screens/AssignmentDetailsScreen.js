@@ -67,30 +67,31 @@ export default function AssignmentDetailsScreen({
   }, [navigation]);
 
   const handleDelete = useCallback(() => {
-    Alert.alert(
-      "Delete Assignment",
-      `Are you sure you want to delete "${assignment?.title}"? This can't be undone.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            if (assignment?.notificationId) {
-              cancelAssignmentReminder(assignment.notificationId);
-            }
-            deleteAssignment(assignment.id);
-            navigation.navigate("MainTabs", { screen: "HomeTab" });
-          },
+  if (!assignment) return;
+
+  Alert.alert(
+    "Delete Assignment",
+    `Are you sure you want to delete "${assignment.title}"?`,
+    [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          deleteAssignment(assignment.id);
+          navigation.goBack();
         },
-      ]
-    );
-  }, [assignment, deleteAssignment, navigation]);
+      },
+    ]
+  );
+}, [assignment, deleteAssignment, navigation]);
 
   const handleToggleStatus = useCallback(() => {
-    toggleAssignmentStatus(assignment.id);
-    navigation.navigate("MainTabs", { screen: "HomeTab" });
-  }, [assignment, toggleAssignmentStatus, navigation]);
+  if (!assignment) return;
+
+  toggleAssignmentStatus(assignment.id);
+  navigation.goBack();
+}, [assignment, toggleAssignmentStatus, navigation]);
 
   // Edge case: assignment was deleted elsewhere, or a stale id was passed
   if (!assignment) {

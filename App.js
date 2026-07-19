@@ -103,14 +103,19 @@ export default function App() {
   }, []);
 
   const deleteAssignment = useCallback((id) => {
-    setAssignments((prev) => {
-      const target = prev.find((item) => item.id === id);
-      if (target?.notificationId) {
-        cancelAssignmentReminder(target.notificationId);
-      }
-      return prev.filter((item) => item.id !== id);
+  console.log("Delete ID:", id);
+
+  setAssignments((prev) => {
+    console.log("Assignments:", prev);
+
+    return prev.filter((item) => {
+      console.log(item.id, typeof item.id);
+      console.log(id, typeof id);
+
+      return item.id !== id;
     });
-  }, []);
+  });
+}, []);
 
   const toggleAssignmentStatus = useCallback((id) => {
     setAssignments((prev) =>
