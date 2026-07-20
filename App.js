@@ -2,8 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { View, ActivityIndicator, StyleSheet } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { createNavigationContainerRef } from "@react-navigation/native";
+import { AuthProvider } from "./src/context/AuthContext";
 import AppNavigator from "./src/navigation/AppNavigator";
-import { loadAssignments, saveAssignments } from "./src/storage/assignmentStorage";
+import {
+  loadAssignments,
+  saveAssignments,
+} from "./src/storage/assignmentStorage";
 import {
   scheduleAssignmentReminder,
   cancelAssignmentReminder,
@@ -14,9 +18,7 @@ import {
 
 const navigationRef = createNavigationContainerRef();
 
-const defaultAssignments = [
-  
-];
+const defaultAssignments = [];
 
 export default function App() {
   const [assignments, setAssignments] = useState(defaultAssignments);
@@ -78,7 +80,7 @@ export default function App() {
     if (newAssignment.reminderDateTime) {
       const result = await scheduleAssignmentReminder(
         { id, title: newAssignment.title, subject: newAssignment.subject },
-        newAssignment.reminderDateTime
+        newAssignment.reminderDateTime,
       );
       if (result.success) {
         notificationId = result.notificationId;
@@ -103,19 +105,19 @@ export default function App() {
   }, []);
 
   const deleteAssignment = useCallback((id) => {
-  console.log("Delete ID:", id);
+    console.log("Delete ID:", id);
 
-  setAssignments((prev) => {
-    console.log("Assignments:", prev);
+    setAssignments((prev) => {
+      console.log("Assignments:", prev);
 
-    return prev.filter((item) => {
-      console.log(item.id, typeof item.id);
-      console.log(id, typeof id);
+      return prev.filter((item) => {
+        console.log(item.id, typeof item.id);
+        console.log(id, typeof id);
 
-      return item.id !== id;
+        return item.id !== id;
+      });
     });
-  });
-}, []);
+  }, []);
 
   const toggleAssignmentStatus = useCallback((id) => {
     setAssignments((prev) =>
@@ -132,9 +134,10 @@ export default function App() {
         return {
           ...item,
           status: newStatus,
-          notificationId: newStatus === "completed" ? null : item.notificationId,
+          notificationId:
+            newStatus === "completed" ? null : item.notificationId,
         };
-      })
+      }),
     );
   }, []);
 
@@ -157,7 +160,7 @@ export default function App() {
       const result = await updateAssignmentReminder(
         { id, title: merged.title, subject: merged.subject },
         currentAssignment.notificationId,
-        changes.reminderDateTime
+        changes.reminderDateTime,
       );
       updatedNotificationId = result.notificationId ?? null;
     } else {
@@ -166,8 +169,10 @@ export default function App() {
 
     setAssignments((prev) =>
       prev.map((item) =>
-        item.id === id ? { ...merged, notificationId: updatedNotificationId } : item
-      )
+        item.id === id
+          ? { ...merged, notificationId: updatedNotificationId }
+          : item,
+      ),
     );
   }, []);
 
@@ -188,15 +193,17 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <AppNavigator
-        navigationRef={navigationRef}
-        assignments={assignments}
-        addAssignment={addAssignment}
-        deleteAssignment={deleteAssignment}
-        toggleAssignmentStatus={toggleAssignmentStatus}
-        updateAssignment={updateAssignment}
-        resetAssignments={resetAssignments}
-      />
+      <AuthProvider>
+        <AppNavigator
+          navigationRef={navigationRef}
+          assignments={assignments}
+          addAssignment={addAssignment}
+          deleteAssignment={deleteAssignment}
+          toggleAssignmentStatus={toggleAssignmentStatus}
+          updateAssignment={updateAssignment}
+          resetAssignments={resetAssignments}
+        />
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }

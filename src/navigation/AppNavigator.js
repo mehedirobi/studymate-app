@@ -1,12 +1,15 @@
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useCallback } from "react";
+import { ActivityIndicator, View } from "react-native";
+
 import AssignmentDetailsScreen from "../screens/AssignmentDetailsScreen";
 import TabNavigator from "./TabNavigator";
+import AuthNavigator from "./AuthNavigator";
+import { useAuth } from "../context/AuthContext";
 
 const Stack = createNativeStackNavigator();
 
-// Hoisted outside the component so it's a stable reference across renders
 const screenOptions = {
   headerStyle: { backgroundColor: "#2563eb" },
   headerTintColor: "#fff",
@@ -21,11 +24,26 @@ export default function AppNavigator({
   addAssignment,
   deleteAssignment,
   toggleAssignmentStatus,
+  updateAssignment,
   resetAssignments,
 }) {
-  // useCallback keeps these render-prop functions referentially stable,
-  // so React Navigation doesn't treat the screen as "changed" on every
-  // parent re-render (which happens often here since `assignments` updates)
+  // ✅ Hook সবসময় Component-এর ভিতরে থাকবে
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
+        <ActivityIndicator size="large" color="#2563eb" />
+      </View>
+    );
+  }
+
   const renderTabNavigator = useCallback(
     (props) => (
       <TabNavigator
@@ -45,27 +63,40 @@ export default function AppNavigator({
         assignments={assignments}
         deleteAssignment={deleteAssignment}
         toggleAssignmentStatus={toggleAssignmentStatus}
+        updateAssignment={updateAssignment}
       />
     ),
-    [assignments, deleteAssignment, toggleAssignmentStatus]
+    [
+      assignments,
+      deleteAssignment,
+      toggleAssignmentStatus,
+      updateAssignment,
+    ]
   );
 
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={screenOptions}>
-        <Stack.Screen name="MainTabs" options={{ headerShown: false }}>
-          {renderTabNavigator}
-        </Stack.Screen>
+      {user ? (
+        <Stack.Navigator screenOptions={screenOptions}>
+          <Stack.Screen
+            name="MainTabs"
+            options={{ headerShown: false }}
+          >
+            {renderTabNavigator}
+          </Stack.Screen>
 
-        <Stack.Screen
-          name="AssignmentDetails"
-          options={({ route }) => ({
-            title: route.params?.title ?? "Assignment Details",
-          })}
-        >
-          {renderAssignmentDetails}
-        </Stack.Screen>
-      </Stack.Navigator>
+          <Stack.Screen
+            name="AssignmentDetails"
+            options={({ route }) => ({
+              title: route.params?.title ?? "Assignment Details",
+            })}
+          >
+            {renderAssignmentDetails}
+          </Stack.Screen>
+        </Stack.Navigator>
+      ) : (
+        <AuthNavigator />
+      )}
     </NavigationContainer>
   );
 }
