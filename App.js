@@ -2,12 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { View, ActivityIndicator, StyleSheet } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { createNavigationContainerRef } from "@react-navigation/native";
+import Toast from "react-native-toast-message";
+
 import { AuthProvider } from "./src/context/AuthContext";
 import AppNavigator from "./src/navigation/AppNavigator";
+
 import {
   loadAssignments,
   saveAssignments,
 } from "./src/storage/assignmentStorage";
+
 import {
   scheduleAssignmentReminder,
   cancelAssignmentReminder,
@@ -24,8 +28,6 @@ export default function App() {
   const [assignments, setAssignments] = useState(defaultAssignments);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Guards the very first save-effect run so we don't immediately
-  // re-write default data over whatever was just loaded from disk.
   const hasHydrated = useRef(false);
 
   useEffect(() => {
@@ -34,7 +36,7 @@ export default function App() {
     const getAssignments = async () => {
       const savedAssignments = await loadAssignments();
 
-      if (isMounted && savedAssignments && savedAssignments.length > 0) {
+      if (isMounted && savedAssignments?.length > 0) {
         setAssignments(savedAssignments);
       }
 
@@ -53,40 +55,42 @@ export default function App() {
 
   useEffect(() => {
     if (!isLoaded || !hasHydrated.current) return;
+
     saveAssignments(assignments);
   }, [assignments, isLoaded]);
 
-  // Deep-link: tapping a reminder notification navigates to that
-  // assignment's details screen, if the app can resolve the navigator.
   useEffect(() => {
     const subscription = addNotificationResponseListener((assignmentId) => {
       if (!assignmentId || !navigationRef.isReady()) return;
-      navigationRef.navigate("AssignmentDetails", { assignmentId });
+
+      navigationRef.navigate("AssignmentDetails", {
+        assignmentId,
+      });
     });
 
     return () => subscription.remove();
   }, []);
 
-  // newAssignment can optionally include `reminderDateTime` (a JS Date)
-  // if the user picked a reminder time on the Add screen.
   const addAssignment = useCallback(async (newAssignment) => {
     if (!newAssignment?.title) return;
 
-    // Safety net: always ensure a unique id exists
     const id = newAssignment.id || Date.now().toString();
 
     let notificationId = null;
 
     if (newAssignment.reminderDateTime) {
       const result = await scheduleAssignmentReminder(
-        { id, title: newAssignment.title, subject: newAssignment.subject },
-        newAssignment.reminderDateTime,
+        {
+          id,
+          title: newAssignment.title,
+          subject: newAssignment.subject,
+        },
+        newAssignment.reminderDateTime
       );
+
       if (result.success) {
         notificationId = result.notificationId;
       }
-      // If scheduling failed, we still save the assignment — reminder
-      // helper already alerted the user, no need to block the whole save.
     }
 
     const finalAssignment = {
@@ -105,18 +109,9 @@ export default function App() {
   }, []);
 
   const deleteAssignment = useCallback((id) => {
-    console.log("Delete ID:", id);
-
-    setAssignments((prev) => {
-      console.log("Assignments:", prev);
-
-      return prev.filter((item) => {
-        console.log(item.id, typeof item.id);
-        console.log(id, typeof id);
-
-        return item.id !== id;
-      });
-    });
+    setAssignments((prev) =>
+      prev.filter((item) => item.id !== id)
+    );
   }, []);
 
   const toggleAssignmentStatus = useCallback((id) => {
@@ -124,10 +119,15 @@ export default function App() {
       prev.map((item) => {
         if (item.id !== id) return item;
 
-        const newStatus = item.status === "pending" ? "completed" : "pending";
+        const newStatus =
+          item.status === "pending"
+            ? "completed"
+            : "pending";
 
-        // If marking as completed, no need for the reminder anymore
-        if (newStatus === "completed" && item.notificationId) {
+        if (
+          newStatus === "completed" &&
+          item.notificationId
+        ) {
           cancelAssignmentReminder(item.notificationId);
         }
 
@@ -135,46 +135,55 @@ export default function App() {
           ...item,
           status: newStatus,
           notificationId:
-            newStatus === "completed" ? null : item.notificationId,
+            newStatus === "completed"
+              ? null
+              : item.notificationId,
         };
-      }),
+      })
     );
   }, []);
 
-  // New: lets an Edit screen (if you add one later) update an assignment's
-  // fields and correctly reschedule/cancel its reminder in one call.
   const updateAssignment = useCallback(async (id, changes) => {
-    let updatedNotificationId = null;
-    let currentAssignment = null;
-
-    setAssignments((prev) => {
-      currentAssignment = prev.find((item) => item.id === id) || null;
-      return prev;
-    });
+    const currentAssignment = assignments.find(
+      (item) => item.id === id
+    );
 
     if (!currentAssignment) return;
 
-    const merged = { ...currentAssignment, ...changes };
+    const merged = {
+      ...currentAssignment,
+      ...changes,
+    };
+
+    let updatedNotificationId =
+      currentAssignment.notificationId;
 
     if ("reminderDateTime" in changes) {
       const result = await updateAssignmentReminder(
-        { id, title: merged.title, subject: merged.subject },
+        {
+          id,
+          title: merged.title,
+          subject: merged.subject,
+        },
         currentAssignment.notificationId,
-        changes.reminderDateTime,
+        changes.reminderDateTime
       );
-      updatedNotificationId = result.notificationId ?? null;
-    } else {
-      updatedNotificationId = currentAssignment.notificationId;
+
+      updatedNotificationId =
+        result.notificationId ?? null;
     }
 
     setAssignments((prev) =>
       prev.map((item) =>
         item.id === id
-          ? { ...merged, notificationId: updatedNotificationId }
-          : item,
-      ),
+          ? {
+              ...merged,
+              notificationId: updatedNotificationId,
+            }
+          : item
+      )
     );
-  }, []);
+  }, [assignments]);
 
   const resetAssignments = useCallback(() => {
     cancelAllReminders();
@@ -185,7 +194,10 @@ export default function App() {
     return (
       <SafeAreaProvider>
         <View style={styles.loadingScreen}>
-          <ActivityIndicator size="large" color="#2563eb" />
+          <ActivityIndicator
+            size="large"
+            color="#2563eb"
+          />
         </View>
       </SafeAreaProvider>
     );
@@ -203,6 +215,8 @@ export default function App() {
           updateAssignment={updateAssignment}
           resetAssignments={resetAssignments}
         />
+
+        <Toast />
       </AuthProvider>
     </SafeAreaProvider>
   );
@@ -211,8 +225,8 @@ export default function App() {
 const styles = StyleSheet.create({
   loadingScreen: {
     flex: 1,
-    alignItems: "center",
     justifyContent: "center",
+    alignItems: "center",
     backgroundColor: "#f8fafc",
   },
 });
