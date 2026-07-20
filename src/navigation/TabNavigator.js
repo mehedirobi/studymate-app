@@ -1,21 +1,20 @@
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
-import { Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useMemo } from "react";
+
 import HomeScreen from "../screens/HomeScreen";
 import AddAssignmentScreen from "../screens/AddAssignmentScreen";
 import AboutScreen from "../screens/AboutScreen";
+import ProfileScreen from "../screens/ProfileScreen";
 
 const Tab = createBottomTabNavigator();
 
-// Maps route name -> [focused icon, unfocused icon]. Hoisted so it's not
-// recreated on every render, and using outline/filled pairs gives a much
-// clearer "selected" state than color alone.
 const TAB_ICONS = {
   HomeTab: ["home", "home-outline"],
   AddTab: ["add-circle", "add-circle-outline"],
   AboutTab: ["information-circle", "information-circle-outline"],
+  ProfileTab: ["person", "person-outline"],
 };
 
 export default function TabNavigator({
@@ -25,14 +24,12 @@ export default function TabNavigator({
 }) {
   const insets = useSafeAreaInsets();
 
-  // Bottom inset handles the home indicator on iOS / gesture nav on Android
-  // so the tab bar doesn't get overlapped by system UI on newer devices.
   const tabBarStyle = useMemo(
     () => ({
       height: 60 + insets.bottom,
       paddingBottom: Math.max(insets.bottom, 8),
       paddingTop: 8,
-      backgroundColor: "#ffffff",
+      backgroundColor: "#fff",
       borderTopWidth: 0,
       elevation: 8,
       shadowColor: "#0f172a",
@@ -49,17 +46,16 @@ export default function TabNavigator({
       tabBarActiveTintColor: "#2563eb",
       tabBarInactiveTintColor: "#94a3b8",
       tabBarStyle,
+
       tabBarLabelStyle: {
         fontSize: 12,
         fontWeight: "600",
-        marginTop: -2,
       },
-      tabBarItemStyle: {
-        // Ensures a comfortable min touch target (accessibility)
-        minHeight: 44,
-      },
+
       tabBarIcon: ({ color, size, focused }) => {
-        const [filled, outline] = TAB_ICONS[route.name] ?? ["ellipse", "ellipse-outline"];
+        const [filled, outline] =
+          TAB_ICONS[route.name] ?? ["ellipse", "ellipse-outline"];
+
         return (
           <Ionicons
             name={focused ? filled : outline}
@@ -74,39 +70,63 @@ export default function TabNavigator({
 
   const renderHome = useCallback(
     (props) => (
-      <HomeScreen {...props} assignments={assignments} resetAssignments={resetAssignments} />
+      <HomeScreen
+        {...props}
+        assignments={assignments}
+        resetAssignments={resetAssignments}
+      />
     ),
     [assignments, resetAssignments]
   );
 
   const renderAdd = useCallback(
-    (props) => <AddAssignmentScreen {...props} addAssignment={addAssignment} />,
+    (props) => (
+      <AddAssignmentScreen
+        {...props}
+        addAssignment={addAssignment}
+      />
+    ),
     [addAssignment]
   );
 
-  const renderAbout = useCallback((props) => <AboutScreen {...props} />, []);
+  const renderAbout = useCallback(
+    (props) => <AboutScreen {...props} />,
+    []
+  );
+
+  const renderProfile = useCallback(
+    (props) => <ProfileScreen {...props} />,
+    []
+  );
 
   return (
     <Tab.Navigator screenOptions={screenOptions}>
       <Tab.Screen
         name="HomeTab"
-        options={{ title: "Home", tabBarAccessibilityLabel: "Home tab" }}
+        options={{ title: "Home" }}
       >
         {renderHome}
       </Tab.Screen>
 
       <Tab.Screen
         name="AddTab"
-        options={{ title: "Add", tabBarAccessibilityLabel: "Add assignment tab" }}
+        options={{ title: "Add" }}
       >
         {renderAdd}
       </Tab.Screen>
 
       <Tab.Screen
         name="AboutTab"
-        options={{ title: "About", tabBarAccessibilityLabel: "About tab" }}
+        options={{ title: "About" }}
       >
         {renderAbout}
+      </Tab.Screen>
+
+      <Tab.Screen
+        name="ProfileTab"
+        options={{ title: "Profile" }}
+      >
+        {renderProfile}
       </Tab.Screen>
     </Tab.Navigator>
   );
