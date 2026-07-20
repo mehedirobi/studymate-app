@@ -28,21 +28,31 @@ export default function App() {
   const [assignments, setAssignments] = useState(defaultAssignments);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  const hasHydrated = useRef(false);
+  // Mirrors `assignments` so callbacks (e.g. updateAssignment) can read the
+  // latest list without needing `assignments` in their dependency array.
+  // This keeps those callbacks referentially stable across renders.
+  const assignmentsRef = useRef(assignments);
+  useEffect(() => {
+    assignmentsRef.current = assignments;
+  }, [assignments]);
+
+  // Skips the one write-back that would otherwise fire right after the
+  // initial load resolves (saving data that was just read is redundant).
+  const skipNextSave = useRef(true);
 
   useEffect(() => {
     let isMounted = true;
 
     const getAssignments = async () => {
-      const savedAssignments = await loadAssignments();
-
-      if (isMounted && savedAssignments?.length > 0) {
-        setAssignments(savedAssignments);
-      }
-
-      if (isMounted) {
-        hasHydrated.current = true;
-        setIsLoaded(true);
+      try {
+        const savedAssignments = await loadAssignments();
+        if (isMounted && savedAssignments?.length > 0) {
+          setAssignments(savedAssignments);
+        }
+      } catch (error) {
+        console.warn("Failed to load assignments:", error);
+      } finally {
+        if (isMounted) setIsLoaded(true);
       }
     };
 
@@ -54,18 +64,23 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isLoaded || !hasHydrated.current) return;
+    if (!isLoaded) return;
 
-    saveAssignments(assignments);
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+
+    saveAssignments(assignments).catch((error) =>
+      console.warn("Failed to save assignments:", error)
+    );
   }, [assignments, isLoaded]);
 
   useEffect(() => {
     const subscription = addNotificationResponseListener((assignmentId) => {
       if (!assignmentId || !navigationRef.isReady()) return;
 
-      navigationRef.navigate("AssignmentDetails", {
-        assignmentId,
-      });
+      navigationRef.navigate("AssignmentDetails", { assignmentId });
     });
 
     return () => subscription.remove();
@@ -79,17 +94,21 @@ export default function App() {
     let notificationId = null;
 
     if (newAssignment.reminderDateTime) {
-      const result = await scheduleAssignmentReminder(
-        {
-          id,
-          title: newAssignment.title,
-          subject: newAssignment.subject,
-        },
-        newAssignment.reminderDateTime
-      );
+      try {
+        const result = await scheduleAssignmentReminder(
+          {
+            id,
+            title: newAssignment.title,
+            subject: newAssignment.subject,
+          },
+          newAssignment.reminderDateTime
+        );
 
-      if (result.success) {
-        notificationId = result.notificationId;
+        if (result.success) {
+          notificationId = result.notificationId;
+        }
+      } catch (error) {
+        console.warn("Failed to schedule reminder:", error);
       }
     }
 
@@ -109,9 +128,7 @@ export default function App() {
   }, []);
 
   const deleteAssignment = useCallback((id) => {
-    setAssignments((prev) =>
-      prev.filter((item) => item.id !== id)
-    );
+    setAssignments((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
   const toggleAssignmentStatus = useCallback((id) => {
@@ -119,71 +136,48 @@ export default function App() {
       prev.map((item) => {
         if (item.id !== id) return item;
 
-        const newStatus =
-          item.status === "pending"
-            ? "completed"
-            : "pending";
+        const newStatus = item.status === "pending" ? "completed" : "pending";
 
-        if (
-          newStatus === "completed" &&
-          item.notificationId
-        ) {
+        if (newStatus === "completed" && item.notificationId) {
           cancelAssignmentReminder(item.notificationId);
         }
 
         return {
           ...item,
           status: newStatus,
-          notificationId:
-            newStatus === "completed"
-              ? null
-              : item.notificationId,
+          notificationId: newStatus === "completed" ? null : item.notificationId,
         };
       })
     );
   }, []);
 
   const updateAssignment = useCallback(async (id, changes) => {
-    const currentAssignment = assignments.find(
-      (item) => item.id === id
-    );
-
+    const currentAssignment = assignmentsRef.current.find((item) => item.id === id);
     if (!currentAssignment) return;
 
-    const merged = {
-      ...currentAssignment,
-      ...changes,
-    };
-
-    let updatedNotificationId =
-      currentAssignment.notificationId;
+    const merged = { ...currentAssignment, ...changes };
+    let updatedNotificationId = currentAssignment.notificationId;
 
     if ("reminderDateTime" in changes) {
-      const result = await updateAssignmentReminder(
-        {
-          id,
-          title: merged.title,
-          subject: merged.subject,
-        },
-        currentAssignment.notificationId,
-        changes.reminderDateTime
-      );
+      try {
+        const result = await updateAssignmentReminder(
+          { id, title: merged.title, subject: merged.subject },
+          currentAssignment.notificationId,
+          changes.reminderDateTime
+        );
 
-      updatedNotificationId =
-        result.notificationId ?? null;
+        updatedNotificationId = result.notificationId ?? null;
+      } catch (error) {
+        console.warn("Failed to update reminder:", error);
+      }
     }
 
     setAssignments((prev) =>
       prev.map((item) =>
-        item.id === id
-          ? {
-              ...merged,
-              notificationId: updatedNotificationId,
-            }
-          : item
+        item.id === id ? { ...merged, notificationId: updatedNotificationId } : item
       )
     );
-  }, [assignments]);
+  }, []);
 
   const resetAssignments = useCallback(() => {
     cancelAllReminders();
@@ -194,10 +188,7 @@ export default function App() {
     return (
       <SafeAreaProvider>
         <View style={styles.loadingScreen}>
-          <ActivityIndicator
-            size="large"
-            color="#2563eb"
-          />
+          <ActivityIndicator size="large" color="#2563eb" />
         </View>
       </SafeAreaProvider>
     );

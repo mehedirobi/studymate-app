@@ -1,20 +1,33 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   TextInput,
   Alert,
   FlatList,
+  Animated,
+  Easing,
+  LayoutAnimation,
+  Platform,
+  UIManager,
+  useWindowDimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient";
+
+// Android needs this flag before LayoutAnimation works.
+if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 const PRIORITY_META = {
-  low: { color: "#16a34a", bg: "#f0fdf4" },
-  medium: { color: "#d97706", bg: "#fffbeb" },
-  high: { color: "#dc2626", bg: "#fef2f2" },
+  low: { color: "#16a34a", bg: "#f0fdf4", label: "Low" },
+  medium: { color: "#d97706", bg: "#fffbeb", label: "Medium" },
+  high: { color: "#dc2626", bg: "#fef2f2", label: "High" },
 };
 
 const FILTERS = [
@@ -48,12 +61,68 @@ const isAssignmentOverdue = (assignment) => {
   return assignment.status === "pending" && deadlineDate < today;
 };
 
-// Extracted + memoized so re-rendering the list (e.g. typing in the search
-// box) doesn't re-render every card — only the ones whose props actually
-// changed re-render.
-const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress }) {
+/* ------------------------------------------------------------------ */
+/* Reusable animated progress bar — animates width whenever % changes  */
+/* ------------------------------------------------------------------ */
+const AnimatedProgressBar = React.memo(function AnimatedProgressBar({
+  percentage,
+  trackStyle,
+  fillColor = "#fff",
+  height = 8,
+}) {
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(anim, {
+      toValue: percentage,
+      duration: 700,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false, // width isn't a transform, can't use native driver
+    }).start();
+  }, [percentage, anim]);
+
+  const width = anim.interpolate({
+    inputRange: [0, 100],
+    outputRange: ["0%", "100%"],
+    extrapolate: "clamp",
+  });
+
+  return (
+    <View style={[{ height, borderRadius: height / 2, overflow: "hidden" }, trackStyle]}>
+      <Animated.View
+        style={{ height: "100%", width, borderRadius: height / 2, backgroundColor: fillColor }}
+      />
+    </View>
+  );
+});
+
+/* ------------------------------------------------------------------ */
+/* Assignment card — press feedback + staggered entrance animation     */
+/* ------------------------------------------------------------------ */
+const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress, index }) {
   const overdue = isAssignmentOverdue(assignment);
   const isCompleted = assignment.status === "completed";
+
+  const scale = useRef(new Animated.Value(1)).current;
+  const entrance = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(entrance, {
+      toValue: 1,
+      duration: 320,
+      delay: Math.min(index * 45, 350),
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handlePressIn = () => {
+    Animated.spring(scale, { toValue: 0.97, useNativeDriver: true, speed: 40, bounciness: 4 }).start();
+  };
+  const handlePressOut = () => {
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 6 }).start();
+  };
 
   let badgeMeta = { label: "Pending", color: "#f97316", bg: "#fff7ed" };
   if (overdue) {
@@ -66,55 +135,182 @@ const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress 
   const priorityMeta = PRIORITY_META[assignment.priority];
 
   return (
-    <TouchableOpacity
-      style={styles.assignmentCard}
-      onPress={() => onPress(assignment)}
-      activeOpacity={0.8}
-      accessibilityRole="button"
-      accessibilityLabel={`${assignment.title}, ${assignment.subject}, ${badgeMeta.label}, ${countdown.label}`}
+    <Animated.View
+      style={{
+        opacity: entrance,
+        transform: [
+          { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) },
+          { scale },
+        ],
+      }}
     >
-      <View style={styles.cardTopRow}>
-        <Text style={styles.assignmentTitle} numberOfLines={1}>
-          {assignment.title}
-        </Text>
-        {priorityMeta && (
-          <View style={[styles.priorityDot, { backgroundColor: priorityMeta.color }]} />
+      <Pressable
+        onPress={() => onPress(assignment)}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        style={styles.assignmentCard}
+        accessibilityRole="button"
+        accessibilityLabel={`${assignment.title}, ${assignment.subject}, ${badgeMeta.label}, ${countdown.label}`}
+      >
+        {overdue && <View style={styles.overdueStripe} />}
+
+        <View style={styles.cardTopRow}>
+          <Text style={styles.assignmentTitle} numberOfLines={1}>
+            {assignment.title}
+          </Text>
+          {priorityMeta && (
+            <View style={[styles.priorityPill, { backgroundColor: priorityMeta.bg }]}>
+              <View style={[styles.priorityDot, { backgroundColor: priorityMeta.color }]} />
+              <Text style={[styles.priorityText, { color: priorityMeta.color }]}>
+                {priorityMeta.label}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {!!assignment.subject && (
+          <Text style={styles.assignmentMeta} numberOfLines={1}>
+            {assignment.subject}
+          </Text>
         )}
-      </View>
 
-      {!!assignment.subject && (
-        <Text style={styles.assignmentMeta} numberOfLines={1}>
-          {assignment.subject}
-        </Text>
-      )}
+        <View style={styles.cardBottomRow}>
+          <View style={styles.countdownWrap}>
+            <Ionicons name={countdown.icon} size={13} color={countdown.color} />
+            <Text style={[styles.countdown, { color: countdown.color }]}>{countdown.label}</Text>
+          </View>
 
-      <View style={styles.cardBottomRow}>
-        <View style={styles.countdownWrap}>
-          <Ionicons name={countdown.icon} size={13} color={countdown.color} />
-          <Text style={[styles.countdown, { color: countdown.color }]}>
-            {countdown.label}
-          </Text>
+          <View style={[styles.badge, { backgroundColor: badgeMeta.bg }]}>
+            <Text style={[styles.badgeText, { color: badgeMeta.color }]}>{badgeMeta.label}</Text>
+          </View>
         </View>
 
-        <View style={[styles.badge, { backgroundColor: badgeMeta.bg }]}>
-          <Text style={[styles.badgeText, { color: badgeMeta.color }]}>
-            {badgeMeta.label}
-          </Text>
-        </View>
-      </View>
-
-      {isCompleted && (
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: "100%" }]} />
-        </View>
-      )}
-    </TouchableOpacity>
+        {isCompleted && (
+          <AnimatedProgressBar
+            percentage={100}
+            height={3}
+            fillColor="#16a34a"
+            trackStyle={{ backgroundColor: "#f1f5f9", marginTop: 10 }}
+          />
+        )}
+      </Pressable>
+    </Animated.View>
   );
 });
+
+/* ------------------------------------------------------------------ */
+/* Filter tabs with a sliding pill indicator                           */
+/* ------------------------------------------------------------------ */
+function FilterTabs({ activeFilter, onChange }) {
+  const [layouts, setLayouts] = useState({});
+  const indicatorX = useRef(new Animated.Value(0)).current;
+  const indicatorW = useRef(new Animated.Value(0)).current;
+  const hasMeasured = useRef(false);
+
+  const animateTo = useCallback(
+    (key, immediate = false) => {
+      const layout = layouts[key];
+      if (!layout) return;
+      const anims = [
+        Animated.timing(indicatorX, {
+          toValue: layout.x,
+          duration: immediate ? 0 : 260,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: false,
+        }),
+        Animated.timing(indicatorW, {
+          toValue: layout.width,
+          duration: immediate ? 0 : 260,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: false,
+        }),
+      ];
+      Animated.parallel(anims).start();
+    },
+    [layouts, indicatorX, indicatorW]
+  );
+
+  useEffect(() => {
+    if (layouts[activeFilter] && !hasMeasured.current) {
+      hasMeasured.current = true;
+      animateTo(activeFilter, true);
+    } else {
+      animateTo(activeFilter, false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFilter, layouts]);
+
+  return (
+    <View style={styles.filterRow}>
+      <Animated.View
+        style={[
+          styles.filterIndicator,
+          { transform: [{ translateX: indicatorX }], width: indicatorW },
+        ]}
+      />
+      {FILTERS.map((filter) => {
+        const active = activeFilter === filter.key;
+        return (
+          <TouchableOpacity
+            key={filter.key}
+            style={styles.filterButton}
+            onLayout={(e) => {
+              const { x, width } = e.nativeEvent.layout;
+              setLayouts((prev) => ({ ...prev, [filter.key]: { x, width } }));
+            }}
+            onPress={() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              onChange(filter.key);
+            }}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Filter: ${filter.label}`}
+            accessibilityState={{ selected: active }}
+          >
+            <Text style={[styles.filterButtonText, active && styles.activeFilterButtonText]}>
+              {filter.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Small press-scale wrapper for the primary / secondary buttons       */
+/* ------------------------------------------------------------------ */
+function ScaleButton({ onPress, style, children, ...rest }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  return (
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <Pressable
+        onPress={onPress}
+        onPressIn={() =>
+          Animated.spring(scale, { toValue: 0.96, useNativeDriver: true, speed: 40, bounciness: 4 }).start()
+        }
+        onPressOut={() =>
+          Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 6 }).start()
+        }
+        style={style}
+        {...rest}
+      >
+        {children}
+      </Pressable>
+    </Animated.View>
+  );
+}
 
 export default function HomeScreen({ navigation, assignments, resetAssignments }) {
   const [searchText, setSearchText] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
+  const { width } = useWindowDimensions();
+
+  // Responsive breakpoints — tablets/large screens get roomier spacing
+  // and a 4-column stat row instead of squeezing 3 cards edge to edge.
+  const isTablet = width >= 768;
+  const horizontalPadding = isTablet ? 32 : 20;
+  const maxContentWidth = isTablet ? 640 : undefined;
 
   const totalAssignments = assignments.length;
 
@@ -128,10 +324,7 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
     [assignments]
   );
 
-  const overdueCount = useMemo(
-    () => assignments.filter(isAssignmentOverdue).length,
-    [assignments]
-  );
+  const overdueCount = useMemo(() => assignments.filter(isAssignmentOverdue).length, [assignments]);
 
   const dueTodayCount = useMemo(() => {
     const today = new Date();
@@ -151,7 +344,6 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
 
   const filteredAssignments = useMemo(() => {
     let filtered = [...assignments];
-
     filtered.sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
 
     if (activeFilter === "pending") {
@@ -191,8 +383,10 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
 
   const goToAdd = useCallback(() => navigation.navigate("AddTab"), [navigation]);
 
+  const handleFilterChange = useCallback((key) => setActiveFilter(key), []);
+
   const renderItem = useCallback(
-    ({ item }) => <AssignmentCard assignment={item} onPress={handleOpenAssignment} />,
+    ({ item, index }) => <AssignmentCard assignment={item} onPress={handleOpenAssignment} index={index} />,
     [handleOpenAssignment]
   );
 
@@ -204,27 +398,30 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
         <View style={styles.headerRow}>
           <View>
             <Text style={styles.heading}>StudyMate</Text>
-            <Text style={styles.subheading}>
-              Manage your assignments and deadlines easily
-            </Text>
+            <Text style={styles.subheading}>Manage your assignments and deadlines easily</Text>
           </View>
         </View>
 
         {/* Progress summary */}
-        <View style={styles.summaryBox}>
+        <LinearGradient
+          colors={["#2563eb", "#4f46e5"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.summaryBox}
+        >
           <View style={styles.summaryTopRow}>
             <Text style={styles.summaryTitle}>Your Progress</Text>
             <Text style={styles.progressPercent}>{progressPercentage}%</Text>
           </View>
-          <View style={styles.progressBarTrack}>
-            <View
-              style={[styles.progressBarFill, { width: `${progressPercentage}%` }]}
-            />
-          </View>
+          <AnimatedProgressBar
+            percentage={progressPercentage}
+            trackStyle={{ backgroundColor: "rgba(255,255,255,0.25)", marginBottom: 10 }}
+            fillColor="#fff"
+          />
           <Text style={styles.summarySubtext}>
             {completedAssignments} of {totalAssignments} assignments completed
           </Text>
-        </View>
+        </LinearGradient>
 
         {/* Stat cards */}
         <View style={styles.statsContainer}>
@@ -259,43 +456,36 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
             {dueTodayCount > 0 && (
               <View style={[styles.alertChip, { backgroundColor: "#fff7ed" }]}>
                 <Ionicons name="flame" size={14} color="#d97706" />
-                <Text style={[styles.alertChipText, { color: "#d97706" }]}>
-                  {dueTodayCount} due today
-                </Text>
+                <Text style={[styles.alertChipText, { color: "#d97706" }]}>{dueTodayCount} due today</Text>
               </View>
             )}
             {overdueCount > 0 && (
               <View style={[styles.alertChip, { backgroundColor: "#fef2f2" }]}>
                 <Ionicons name="alert-circle" size={14} color="#dc2626" />
-                <Text style={[styles.alertChipText, { color: "#dc2626" }]}>
-                  {overdueCount} overdue
-                </Text>
+                <Text style={[styles.alertChipText, { color: "#dc2626" }]}>{overdueCount} overdue</Text>
               </View>
             )}
           </View>
         )}
 
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={goToAdd}
-          activeOpacity={0.85}
-          accessibilityRole="button"
-          accessibilityLabel="Add new assignment"
-        >
-          <Ionicons name="add-circle" size={20} color="#fff" />
-          <Text style={styles.addButtonText}>Add Assignment</Text>
-        </TouchableOpacity>
+        <ScaleButton style={styles.addButton} onPress={goToAdd} accessibilityRole="button" accessibilityLabel="Add new assignment">
+          <View style={styles.buttonInner}>
+            <Ionicons name="add-circle" size={20} color="#fff" />
+            <Text style={styles.addButtonText}>Add Assignment</Text>
+          </View>
+        </ScaleButton>
 
-        <TouchableOpacity
+        <ScaleButton
           style={styles.resetButton}
           onPress={handleReset}
-          activeOpacity={0.85}
           accessibilityRole="button"
           accessibilityLabel="Reset all assignments"
         >
-          <Ionicons name="refresh-outline" size={16} color="#dc2626" />
-          <Text style={styles.resetButtonText}>Reset All Assignments</Text>
-        </TouchableOpacity>
+          <View style={styles.buttonInner}>
+            <Ionicons name="refresh-outline" size={16} color="#dc2626" />
+            <Text style={styles.resetButtonText}>Reset All Assignments</Text>
+          </View>
+        </ScaleButton>
 
         <View style={styles.searchWrap}>
           <Ionicons name="search-outline" size={18} color="#94a3b8" style={styles.searchIcon} />
@@ -312,33 +502,14 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
               onPress={() => setSearchText("")}
               accessibilityRole="button"
               accessibilityLabel="Clear search"
+              hitSlop={8}
             >
               <Ionicons name="close-circle" size={18} color="#94a3b8" />
             </TouchableOpacity>
           )}
         </View>
 
-        <View style={styles.filterRow}>
-          {FILTERS.map((filter) => {
-            const active = activeFilter === filter.key;
-            return (
-              <TouchableOpacity
-                key={filter.key}
-                style={[styles.filterButton, active && styles.activeFilterButton]}
-                onPress={() => setActiveFilter(filter.key)}
-                accessibilityRole="button"
-                accessibilityLabel={`Filter: ${filter.label}`}
-                accessibilityState={{ selected: active }}
-              >
-                <Text
-                  style={[styles.filterButtonText, active && styles.activeFilterButtonText]}
-                >
-                  {filter.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+        <FilterTabs activeFilter={activeFilter} onChange={handleFilterChange} />
 
         <View style={styles.sectionTitleRow}>
           <Text style={styles.sectionTitle}>Assignments</Text>
@@ -357,6 +528,7 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
       handleReset,
       searchText,
       activeFilter,
+      handleFilterChange,
       filteredAssignments.length,
     ]
   );
@@ -366,9 +538,7 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
       <View style={styles.emptyBox}>
         <Ionicons name="file-tray-outline" size={40} color="#94a3b8" />
         <Text style={styles.emptyTitle}>No assignments found</Text>
-        <Text style={styles.emptyText}>
-          Try changing your search or filter, or add a new assignment.
-        </Text>
+        <Text style={styles.emptyText}>Try changing your search or filter, or add a new assignment.</Text>
       </View>
     ),
     []
@@ -382,7 +552,10 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
         keyExtractor={keyExtractor}
         ListHeaderComponent={ListHeader}
         ListEmptyComponent={ListEmpty}
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          { paddingHorizontal: horizontalPadding, maxWidth: maxContentWidth, alignSelf: "center", width: "100%" },
+        ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         initialNumToRender={8}
@@ -400,7 +573,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#f8fafc",
   },
   container: {
-    padding: 20,
+    paddingTop: 20,
     paddingBottom: 40,
   },
   headerRow: {
@@ -411,16 +584,21 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#0f172a",
     marginBottom: 4,
+    letterSpacing: -0.3,
   },
   subheading: {
     fontSize: 14,
     color: "#64748b",
   },
   summaryBox: {
-    backgroundColor: "#2563eb",
     padding: 18,
-    borderRadius: 18,
+    borderRadius: 20,
     marginBottom: 16,
+    shadowColor: "#4338ca",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 6,
   },
   summaryTopRow: {
     flexDirection: "row",
@@ -437,18 +615,6 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "800",
     color: "#fff",
-  },
-  progressBarTrack: {
-    height: 8,
-    borderRadius: 6,
-    backgroundColor: "rgba(255,255,255,0.25)",
-    overflow: "hidden",
-    marginBottom: 10,
-  },
-  progressBarFill: {
-    height: "100%",
-    borderRadius: 6,
-    backgroundColor: "#fff",
   },
   summarySubtext: {
     color: "#dbeafe",
@@ -509,11 +675,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
-  addButton: {
+  buttonInner: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
+  },
+  addButton: {
     backgroundColor: "#2563eb",
     paddingVertical: 14,
     borderRadius: 12,
@@ -530,10 +698,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   resetButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
     backgroundColor: "#fef2f2",
     paddingVertical: 12,
     borderRadius: 12,
@@ -569,19 +733,29 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
     marginBottom: 20,
+    position: "relative",
+    backgroundColor: "#f1f5f9",
+    borderRadius: 12,
+    padding: 4,
+  },
+  filterIndicator: {
+    position: "absolute",
+    top: 4,
+    bottom: 4,
+    left: 0,
+    backgroundColor: "#2563eb",
+    borderRadius: 9,
+    shadowColor: "#2563eb",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 2,
   },
   filterButton: {
     flex: 1,
-    backgroundColor: "#fff",
-    paddingVertical: 11,
-    borderRadius: 10,
+    paddingVertical: 9,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  activeFilterButton: {
-    backgroundColor: "#2563eb",
-    borderColor: "#2563eb",
+    zIndex: 1,
   },
   filterButtonText: {
     color: "#334155",
@@ -616,29 +790,50 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 16,
     marginBottom: 12,
+    overflow: "hidden",
     shadowColor: "#0f172a",
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
   },
+  overdueStripe: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+    backgroundColor: "#dc2626",
+  },
   cardTopRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 4,
+    gap: 8,
   },
   assignmentTitle: {
     flex: 1,
     fontSize: 16,
     fontWeight: "700",
     color: "#0f172a",
-    marginRight: 8,
+  },
+  priorityPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
   },
   priorityDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  priorityText: {
+    fontSize: 10,
+    fontWeight: "700",
   },
   assignmentMeta: {
     fontSize: 13,
@@ -667,17 +862,6 @@ const styles = StyleSheet.create({
   badgeText: {
     fontSize: 11,
     fontWeight: "700",
-  },
-  progressTrack: {
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: "#f1f5f9",
-    marginTop: 10,
-    overflow: "hidden",
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: "#16a34a",
   },
   emptyBox: {
     backgroundColor: "#fff",

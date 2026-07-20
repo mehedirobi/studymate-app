@@ -87,6 +87,47 @@ export async function hasNotificationPermission() {
   return status === "granted";
 }
 
+// Shared body text builder so single + batch scheduling stay in sync.
+function buildReminderBody(assignment, repeat = "none") {
+  const base = assignment.subject
+    ? `${assignment.title} (${assignment.subject}) is due soon.`
+    : `${assignment.title} is due soon.`;
+
+  if (repeat === "daily") return `${base} (Repeats daily)`;
+  if (repeat === "weekly") return `${base} (Repeats weekly)`;
+  return base;
+}
+
+// Builds the correct new-style trigger for a one-time, daily, or weekly reminder.
+function buildTrigger(dateTime, repeat = "none") {
+  const channelId = Platform.OS === "android" ? ANDROID_CHANNEL_ID : undefined;
+
+  if (repeat === "daily") {
+    return {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: dateTime.getHours(),
+      minute: dateTime.getMinutes(),
+      channelId,
+    };
+  }
+
+  if (repeat === "weekly") {
+    return {
+      type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+      weekday: dateTime.getDay() + 1, // expo: 1 = Sunday ... 7 = Saturday
+      hour: dateTime.getHours(),
+      minute: dateTime.getMinutes(),
+      channelId,
+    };
+  }
+
+  return {
+    type: Notifications.SchedulableTriggerInputTypes.DATE,
+    date: dateTime,
+    channelId,
+  };
+}
+
 /**
  * Schedule a reminder notification for an assignment.
  * @param {Object} assignment - must have `title`, optionally `subject` and `id`
@@ -121,17 +162,11 @@ export async function scheduleAssignmentReminder(
     const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
         title: "📚 StudyMate Reminder",
-        body: assignment.subject
-          ? `${assignment.title} (${assignment.subject}) is due soon.`
-          : `${assignment.title} is due soon.`,
+        body: buildReminderBody(assignment, "none"),
         sound: true,
         data: { assignmentId: assignment.id ?? null },
       },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: reminderDateTime,
-        channelId: Platform.OS === "android" ? ANDROID_CHANNEL_ID : undefined,
-      },
+      trigger: buildTrigger(reminderDateTime, "none"),
     });
 
     return { success: true, notificationId };
@@ -145,6 +180,61 @@ export async function scheduleAssignmentReminder(
     }
     return { success: false, error: error?.message || "unknown-error" };
   }
+}
+
+/**
+ * Schedule MULTIPLE reminders for one assignment in a single call — each can
+ * be one-time, or set to repeat "daily" / "weekly". Asks for permission once
+ * up front (not per-reminder), then schedules each and keeps going even if
+ * one fails, so a single bad row doesn't block the rest.
+ *
+ * @param {Object} assignment - must have `title`, optionally `subject`, `id`
+ * @param {Array<{dateTime: Date, repeat?: "none"|"daily"|"weekly"}>} reminders
+ * @param {Object} [options]
+ * @param {boolean} [options.showAlerts=true] - show the permission Alert if denied
+ * @returns {Promise<Array<{success: boolean, notificationId?: string, error?: string, repeat: string}>>}
+ *   Save the full returned array on the assignment (e.g. `reminderNotifications`)
+ *   so cancelAssignmentReminders() can clean them up later.
+ */
+export async function scheduleAssignmentReminders(assignment, reminders, { showAlerts = true } = {}) {
+  if (!assignment?.title || !reminders?.length) return [];
+
+  const { granted } = await requestNotificationPermission({ showAlerts });
+  if (!granted) return [];
+
+  const results = [];
+
+  for (const reminder of reminders) {
+    const { dateTime, repeat = "none" } = reminder;
+
+    if (!(dateTime instanceof Date) || Number.isNaN(dateTime.getTime())) {
+      results.push({ success: false, error: "invalid-date", repeat });
+      continue;
+    }
+    if (repeat === "none" && dateTime <= new Date()) {
+      results.push({ success: false, error: "date-in-past", repeat });
+      continue;
+    }
+
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const notificationId = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: "📚 StudyMate Reminder",
+          body: buildReminderBody(assignment, repeat),
+          sound: true,
+          data: { assignmentId: assignment.id ?? null },
+        },
+        trigger: buildTrigger(dateTime, repeat),
+      });
+      results.push({ success: true, notificationId, repeat });
+    } catch (error) {
+      console.log("Failed to schedule reminder:", error);
+      results.push({ success: false, error: error?.message || "unknown-error", repeat });
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -163,6 +253,22 @@ export async function cancelAssignmentReminder(notificationId) {
     console.log("Failed to cancel notification:", error);
     return false;
   }
+}
+
+/**
+ * Cancel every reminder produced by scheduleAssignmentReminders() in one go.
+ * Pass it the exact array that function returned (e.g. from
+ * assignment.reminderNotifications) — safe to call with an empty/missing array.
+ * @param {Array<{success: boolean, notificationId?: string}>} scheduledReminders
+ * @returns {Promise<void>}
+ */
+export async function cancelAssignmentReminders(scheduledReminders) {
+  if (!scheduledReminders?.length) return;
+  await Promise.all(
+    scheduledReminders
+      .filter((r) => r.success && r.notificationId)
+      .map((r) => cancelAssignmentReminder(r.notificationId))
+  );
 }
 
 /**

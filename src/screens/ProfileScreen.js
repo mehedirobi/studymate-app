@@ -119,7 +119,7 @@ export default function ProfileScreen() {
       </TouchableOpacity>
 
       <Text style={styles.footer}>
-        Made with ❤️ for students
+        
       </Text>
     </View>
   );

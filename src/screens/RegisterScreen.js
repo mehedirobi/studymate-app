@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,51 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { register } from "../services/authService";
 
+const EMAIL_REGEX = /\S+@\S+\.\S+/;
+
+const REGISTER_ERROR_MESSAGES = {
+  "auth/email-already-in-use": "Email already exists.",
+  "auth/invalid-email": "Invalid email.",
+  "auth/weak-password": "Weak password.",
+};
+
+// Shared input row (icon + text field + optional password-visibility toggle)
+// so the four fields below don't each repeat the same markup.
+function FormField({
+  icon,
+  secureEntry,
+  onToggleSecure,
+  inputRef,
+  ...textInputProps
+}) {
+  return (
+    <View style={styles.inputContainer}>
+      <Ionicons name={icon} size={20} color="#64748b" />
+      <TextInput
+        ref={inputRef}
+        style={styles.input}
+        placeholderTextColor="#94a3b8"
+        secureTextEntry={secureEntry}
+        {...textInputProps}
+      />
+      {onToggleSecure && (
+        <TouchableOpacity
+          onPress={onToggleSecure}
+          accessibilityRole="button"
+          accessibilityLabel={secureEntry ? "Show password" : "Hide password"}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons
+            name={secureEntry ? "eye-off-outline" : "eye-outline"}
+            size={22}
+            color="#64748b"
+          />
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
 export default function RegisterScreen({ navigation }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -26,11 +71,13 @@ export default function RegisterScreen({ navigation }) {
 
   const [loading, setLoading] = useState(false);
 
-  const validateEmail = (email) => {
-    return /\S+@\S+\.\S+/.test(email);
-  };
+  // Lets "next" on the keyboard jump to the following field instead of
+  // dismissing the keyboard after every entry.
+  const emailRef = useRef(null);
+  const passwordRef = useRef(null);
+  const confirmRef = useRef(null);
 
-  const handleRegister = async () => {
+  const handleRegister = useCallback(async () => {
     const fullName = name.trim();
     const userEmail = email.trim();
 
@@ -39,60 +86,36 @@ export default function RegisterScreen({ navigation }) {
       return;
     }
 
-    if (!validateEmail(userEmail)) {
+    if (!EMAIL_REGEX.test(userEmail)) {
       Alert.alert("Invalid Email", "Please enter a valid email.");
       return;
     }
 
     if (password.length < 6) {
-      Alert.alert(
-        "Weak Password",
-        "Password must be at least 6 characters."
-      );
+      Alert.alert("Weak Password", "Password must be at least 6 characters.");
       return;
     }
 
     if (password !== confirmPassword) {
-      Alert.alert(
-        "Password Mismatch",
-        "Passwords do not match."
-      );
+      Alert.alert("Password Mismatch", "Passwords do not match.");
       return;
     }
 
     try {
       setLoading(true);
-
       await register(fullName, userEmail, password);
 
-      Alert.alert(
-        "Success",
-        "Account created successfully!"
-      );
-
+      Alert.alert("Success", "Account created successfully!", [
+        { text: "OK", onPress: () => navigation.goBack() },
+      ]);
     } catch (error) {
-      let message = "Something went wrong.";
-
-      switch (error.code) {
-        case "auth/email-already-in-use":
-          message = "Email already exists.";
-          break;
-
-        case "auth/invalid-email":
-          message = "Invalid email.";
-          break;
-
-        case "auth/weak-password":
-          message = "Weak password.";
-          break;
-      }
-
+      const message =
+        REGISTER_ERROR_MESSAGES[error.code] || "Something went wrong.";
       Alert.alert("Registration Failed", message);
-
     } finally {
       setLoading(false);
     }
-  };
+  }, [name, email, password, confirmPassword, navigation]);
 
   return (
     <KeyboardAvoidingView
@@ -104,165 +127,99 @@ export default function RegisterScreen({ navigation }) {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.logoContainer}>
-          <Ionicons
-            name="person-add"
-            size={60}
-            color="#2563eb"
-          />
-
-          <Text style={styles.title}>
-            Create Account
-          </Text>
-
+          <Ionicons name="person-add" size={60} color="#2563eb" />
+          <Text style={styles.title}>Create Account</Text>
           <Text style={styles.subtitle}>
             Join StudyMate and manage your assignments smarter.
           </Text>
         </View>
 
-        {/* Name */}
+        <FormField
+          icon="person-outline"
+          placeholder="Full Name"
+          value={name}
+          onChangeText={setName}
+          autoComplete="name"
+          textContentType="name"
+          returnKeyType="next"
+          editable={!loading}
+          onSubmitEditing={() => emailRef.current?.focus()}
+        />
 
-        <View style={styles.inputContainer}>
-          <Ionicons
-            name="person-outline"
-            size={20}
-            color="#64748b"
-          />
+        <FormField
+          inputRef={emailRef}
+          icon="mail-outline"
+          placeholder="Email Address"
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="email"
+          textContentType="emailAddress"
+          value={email}
+          onChangeText={setEmail}
+          returnKeyType="next"
+          editable={!loading}
+          onSubmitEditing={() => passwordRef.current?.focus()}
+        />
 
-          <TextInput
-            style={styles.input}
-            placeholder="Full Name"
-            value={name}
-            onChangeText={setName}
-          />
-        </View>
+        <FormField
+          inputRef={passwordRef}
+          icon="lock-closed-outline"
+          placeholder="Password"
+          secureEntry={securePassword}
+          onToggleSecure={() => setSecurePassword((prev) => !prev)}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="password-new"
+          textContentType="newPassword"
+          value={password}
+          onChangeText={setPassword}
+          returnKeyType="next"
+          editable={!loading}
+          onSubmitEditing={() => confirmRef.current?.focus()}
+        />
 
-        {/* Email */}
-
-        <View style={styles.inputContainer}>
-          <Ionicons
-            name="mail-outline"
-            size={20}
-            color="#64748b"
-          />
-
-          <TextInput
-            style={styles.input}
-            placeholder="Email Address"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={email}
-            onChangeText={setEmail}
-          />
-        </View>
-
-        {/* Password */}
-
-        <View style={styles.inputContainer}>
-          <Ionicons
-            name="lock-closed-outline"
-            size={20}
-            color="#64748b"
-          />
-
-          <TextInput
-            style={styles.input}
-            placeholder="Password"
-            secureTextEntry={securePassword}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={password}
-            onChangeText={setPassword}
-          />
-
-          <TouchableOpacity
-            onPress={() =>
-              setSecurePassword(!securePassword)
-            }
-          >
-            <Ionicons
-              name={
-                securePassword
-                  ? "eye-off-outline"
-                  : "eye-outline"
-              }
-              size={22}
-              color="#64748b"
-            />
-          </TouchableOpacity>
-        </View>
-
-        {/* Confirm Password */}
-
-        <View style={styles.inputContainer}>
-          <Ionicons
-            name="shield-checkmark-outline"
-            size={20}
-            color="#64748b"
-          />
-
-          <TextInput
-            style={styles.input}
-            placeholder="Confirm Password"
-            secureTextEntry={secureConfirm}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-          />
-
-          <TouchableOpacity
-            onPress={() =>
-              setSecureConfirm(!secureConfirm)
-            }
-          >
-            <Ionicons
-              name={
-                secureConfirm
-                  ? "eye-off-outline"
-                  : "eye-outline"
-              }
-              size={22}
-              color="#64748b"
-            />
-          </TouchableOpacity>
-        </View>
-
-        {/* Register Button */}
+        <FormField
+          inputRef={confirmRef}
+          icon="shield-checkmark-outline"
+          placeholder="Confirm Password"
+          secureEntry={secureConfirm}
+          onToggleSecure={() => setSecureConfirm((prev) => !prev)}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="password-new"
+          textContentType="newPassword"
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+          returnKeyType="done"
+          editable={!loading}
+          onSubmitEditing={handleRegister}
+        />
 
         <TouchableOpacity
-          style={[
-            styles.button,
-            loading && { opacity: 0.7 },
-          ]}
+          style={[styles.button, loading && styles.buttonDisabled]}
           disabled={loading}
           onPress={handleRegister}
+          accessibilityRole="button"
+          accessibilityLabel="Create account"
         >
           {loading ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.buttonText}>
-              Create Account
-            </Text>
+            <Text style={styles.buttonText}>Create Account</Text>
           )}
         </TouchableOpacity>
 
-        {/* Login */}
-
         <View style={styles.bottomRow}>
-          <Text style={styles.bottomText}>
-            Already have an account?
-          </Text>
-
+          <Text style={styles.bottomText}>Already have an account?</Text>
           <TouchableOpacity
             onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Go to login"
           >
-            <Text style={styles.login}>
-              Login
-            </Text>
+            <Text style={styles.login}>Login</Text>
           </TouchableOpacity>
         </View>
-
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -322,6 +279,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginTop: 10,
+  },
+
+  buttonDisabled: {
+    opacity: 0.7,
   },
 
   buttonText: {

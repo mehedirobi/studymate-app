@@ -11,15 +11,23 @@ import { useAuth } from "../context/AuthContext";
 const Stack = createNativeStackNavigator();
 
 const screenOptions = {
-  headerStyle: { backgroundColor: "#2563eb" },
+  headerStyle: {
+    backgroundColor: "#2563eb",
+  },
   headerTintColor: "#fff",
-  headerTitleStyle: { fontWeight: "700", fontSize: 18 },
+  headerTitleStyle: {
+    fontWeight: "700",
+    fontSize: 18,
+  },
   headerShadowVisible: false,
-  contentStyle: { backgroundColor: "#f8fafc" },
+  contentStyle: {
+    backgroundColor: "#f8fafc",
+  },
   animation: "slide_from_right",
 };
 
 export default function AppNavigator({
+  navigationRef,
   assignments,
   addAssignment,
   deleteAssignment,
@@ -27,7 +35,6 @@ export default function AppNavigator({
   updateAssignment,
   resetAssignments,
 }) {
-  // ✅ Hook সবসময় Component-এর ভিতরে থাকবে
   const { user, loading } = useAuth();
 
   if (loading) {
@@ -37,6 +44,7 @@ export default function AppNavigator({
           flex: 1,
           justifyContent: "center",
           alignItems: "center",
+          backgroundColor: "#f8fafc",
         }}
       >
         <ActivityIndicator size="large" color="#2563eb" />
@@ -75,7 +83,7 @@ export default function AppNavigator({
   );
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       {user ? (
         <Stack.Navigator screenOptions={screenOptions}>
           <Stack.Screen
@@ -88,7 +96,9 @@ export default function AppNavigator({
           <Stack.Screen
             name="AssignmentDetails"
             options={({ route }) => ({
-              title: route.params?.title ?? "Assignment Details",
+              title:
+                route.params?.title ??
+                "Assignment Details",
             })}
           >
             {renderAssignmentDetails}

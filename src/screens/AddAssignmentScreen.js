@@ -1,24 +1,39 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Text,
   TextInput,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   Alert,
   ScrollView,
   Platform,
   KeyboardAvoidingView,
   ActivityIndicator,
   View,
+  Animated,
+  Easing,
+  LayoutAnimation,
+  UIManager,
+  useWindowDimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { scheduleAssignmentReminders } from "../utils/notificationHelper";
 
 const isWeb = Platform.OS === "web";
 
-// Accepts YYYY-M-D, YYYY-MM-D, YYYY-M-DD, YYYY-MM-DD
-const DATE_REGEX = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
+if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+const REPEAT_OPTIONS = [
+  { value: "none", label: "Once" },
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+];
 
 const PRIORITIES = [
   { value: "low", label: "Low", color: "#16a34a", bg: "#f0fdf4" },
@@ -26,27 +41,102 @@ const PRIORITIES = [
   { value: "high", label: "High", color: "#dc2626", bg: "#fef2f2" },
 ];
 
-// Converts "2026-7-15" -> "2026-07-15". Returns null if invalid.
-const normalizeDeadline = (value) => {
-  const match = DATE_REGEX.exec(value.trim());
+// Day-first entry: 20-7-2026, 20-07-2026, etc.
+const DAY_FIRST_REGEX = /^(\d{1,2})-(\d{1,2})-(\d{4})$/;
+
+const normalizeDayFirstDate = (value) => {
+  const match = DAY_FIRST_REGEX.exec(value.trim());
   if (!match) return null;
 
-  const [, year, month, day] = match;
-  const monthNum = Number(month);
-  const dayNum = Number(day);
+  const [, day, month, year] = match;
+  const d = Number(day);
+  const m = Number(month);
+  const y = Number(year);
 
-  if (monthNum < 1 || monthNum > 12 || dayNum < 1 || dayNum > 31) return null;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
 
-  const paddedMonth = month.padStart(2, "0");
-  const paddedDay = day.padStart(2, "0");
-  const normalized = `${year}-${paddedMonth}-${paddedDay}`;
+  const date = new Date(y, m - 1, d);
+  // Guards against JS silently rolling "31-04-2026" into May 1st.
+  if (date.getDate() !== d || date.getMonth() !== m - 1) return null;
 
-  const parsed = new Date(normalized);
-  return Number.isNaN(parsed.getTime()) ? null : normalized;
+  return date;
 };
 
-// Small reusable field wrapper — keeps label + input + inline error consistent
-// without needing a separate file.
+const toISODate = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const formatDDMMYYYY = (date) => {
+  const d = String(date.getDate()).padStart(2, "0");
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const y = date.getFullYear();
+  return `${d}-${m}-${y}`;
+};
+
+const formatTime = (date) =>
+  date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+let reminderIdCounter = 0;
+const nextReminderId = () => `reminder-${Date.now()}-${reminderIdCounter++}`;
+
+/* ------------------------------------------------------------------ */
+/* Small animation helpers                                             */
+/* ------------------------------------------------------------------ */
+function FadeInUp({ index = 0, style, children }) {
+  const anim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(anim, {
+      toValue: 1,
+      duration: 320,
+      delay: Math.min(index * 55, 400),
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity: anim,
+          transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+function ScaleButton({ onPress, style, disabled, children, ...rest }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  return (
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        onPressIn={() =>
+          !disabled &&
+          Animated.spring(scale, { toValue: 0.96, useNativeDriver: true, speed: 40, bounciness: 4 }).start()
+        }
+        onPressOut={() =>
+          Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 6 }).start()
+        }
+        style={style}
+        {...rest}
+      >
+        {children}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+// Small reusable field wrapper — keeps label + input + inline error consistent.
 function FormField({ label, error, children }) {
   return (
     <View style={styles.fieldWrap}>
@@ -63,24 +153,27 @@ function FormField({ label, error, children }) {
 }
 
 export default function AddAssignmentScreen({ navigation, addAssignment }) {
+  const { width } = useWindowDimensions();
+  const isTablet = width >= 768;
+
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState("");
-  const [deadline, setDeadline] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("medium");
   const [isSaving, setIsSaving] = useState(false);
-
-  // Inline field errors, cleared as the user corrects each field
   const [errors, setErrors] = useState({});
 
-  // Native picker state (Android/iOS)
-  const [reminderDateTime, setReminderDateTime] = useState(null);
-  const [pickerMode, setPickerMode] = useState(null); // "date" | "time" | null
-  const [tempPickerDate, setTempPickerDate] = useState(new Date());
+  // Deadline — native Date on phones, day-first text fallback on web.
+  const [deadlineDate, setDeadlineDate] = useState(null);
+  const [webDeadlineText, setWebDeadlineText] = useState("");
 
-  // Web fallback state (plain text entry)
-  const [webReminderDate, setWebReminderDate] = useState("");
-  const [webReminderTime, setWebReminderTime] = useState("");
+  // Multiple reminders, each optionally repeating.
+  const [reminders, setReminders] = useState([]);
+
+  // Shared picker state — works for the deadline field AND any reminder row.
+  const [activePicker, setActivePicker] = useState(null); // { type: "deadline" } | { type: "reminder", id }
+  const [pickerStage, setPickerStage] = useState("date"); // android: date -> time
+  const [tempPickerDate, setTempPickerDate] = useState(new Date());
 
   const clearFieldError = useCallback((field) => {
     setErrors((prev) => {
@@ -91,178 +184,181 @@ export default function AddAssignmentScreen({ navigation, addAssignment }) {
     });
   }, []);
 
-  const handleTitleChange = useCallback(
-    (value) => {
-      setTitle(value);
-      clearFieldError("title");
-    },
-    [clearFieldError]
-  );
+  const handleTitleChange = useCallback((v) => { setTitle(v); clearFieldError("title"); }, [clearFieldError]);
+  const handleSubjectChange = useCallback((v) => { setSubject(v); clearFieldError("subject"); }, [clearFieldError]);
+  const handleWebDeadlineChange = useCallback((v) => { setWebDeadlineText(v); clearFieldError("deadline"); }, [clearFieldError]);
 
-  const handleSubjectChange = useCallback(
-    (value) => {
-      setSubject(value);
-      clearFieldError("subject");
-    },
-    [clearFieldError]
-  );
+  /* ---------------------------- Deadline picker ---------------------------- */
+  const openDeadlinePicker = useCallback(() => {
+    clearFieldError("deadline");
+    setTempPickerDate(deadlineDate || new Date());
+    setPickerStage("date");
+    setActivePicker({ type: "deadline" });
+  }, [deadlineDate, clearFieldError]);
 
-  const handleDeadlineChange = useCallback(
-    (value) => {
-      setDeadline(value);
-      clearFieldError("deadline");
-    },
-    [clearFieldError]
-  );
+  /* ---------------------------- Reminder rows ---------------------------- */
+  const addReminder = useCallback(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    const id = nextReminderId();
+    setReminders((prev) => [
+      ...prev,
+      { id, dateTime: null, repeat: "none", webDate: "", webTime: "" },
+    ]);
+    if (!isWeb) {
+      setTempPickerDate(new Date(Date.now() + 60 * 60 * 1000)); // default: 1 hour from now
+      setPickerStage("date");
+      setActivePicker({ type: "reminder", id });
+    }
+  }, []);
 
-  const openReminderPicker = useCallback(() => {
-    setTempPickerDate(reminderDateTime || new Date());
-    setPickerMode("date");
-  }, [reminderDateTime]);
+  const removeReminder = useCallback((id) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setReminders((prev) => prev.filter((r) => r.id !== id));
+  }, []);
 
-  const closePicker = useCallback(() => setPickerMode(null), []);
+  const updateReminder = useCallback((id, patch) => {
+    setReminders((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }, []);
+
+  const openReminderPicker = useCallback((id, existingDateTime) => {
+    setTempPickerDate(existingDateTime || new Date(Date.now() + 60 * 60 * 1000));
+    setPickerStage("date");
+    setActivePicker({ type: "reminder", id });
+  }, []);
+
+  /* ---------------------------- Shared picker logic ---------------------------- */
+  const closePicker = useCallback(() => {
+    setActivePicker(null);
+    setPickerStage("date");
+  }, []);
 
   const handlePickerChange = useCallback(
     (event, selectedValue) => {
       if (event.type === "dismissed") {
-        setPickerMode(null);
+        closePicker();
         return;
       }
+      if (!activePicker) return;
 
       if (Platform.OS === "ios") {
-        // iOS spinner fires onChange continuously as the user scrolls —
-        // just track the value, don't close (closing happens via "Done").
-        if (selectedValue) {
-          setTempPickerDate(selectedValue);
-          setReminderDateTime(selectedValue);
+        // iOS spinner fires continuously — track live, close via "Done".
+        if (!selectedValue) return;
+        setTempPickerDate(selectedValue);
+        if (activePicker.type === "deadline") {
+          setDeadlineDate(selectedValue);
+        } else {
+          updateReminder(activePicker.id, { dateTime: selectedValue });
         }
         return;
       }
 
-      // Android: date first, then time
-      if (pickerMode === "date") {
+      // Android
+      if (activePicker.type === "deadline") {
+        setDeadlineDate(selectedValue || tempPickerDate);
+        closePicker();
+        return;
+      }
+
+      // Android reminder — two-step: date, then time
+      if (pickerStage === "date") {
         const updated = selectedValue || tempPickerDate;
         setTempPickerDate(updated);
-        setPickerMode("time");
-      } else if (pickerMode === "time") {
+        setPickerStage("time");
+      } else {
         const finalDateTime = selectedValue || tempPickerDate;
-        setReminderDateTime(finalDateTime);
-        setPickerMode(null);
+        updateReminder(activePicker.id, { dateTime: finalDateTime });
+        closePicker();
       }
     },
-    [pickerMode, tempPickerDate]
+    [activePicker, pickerStage, tempPickerDate, closePicker, updateReminder]
   );
-
-  const clearReminder = useCallback(() => {
-    setReminderDateTime(null);
-    setWebReminderDate("");
-    setWebReminderTime("");
-  }, []);
-
-  const formatReminderLabel = (date) => {
-    const dateStr = date.toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-    const timeStr = date.toLocaleTimeString(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-    return `${dateStr} at ${timeStr}`;
-  };
-
-  // Combines webReminderDate ("2026-07-20") + webReminderTime ("14:30") into a Date
-  const buildWebReminderDate = () => {
-    if (!webReminderDate.trim() || !webReminderTime.trim()) return null;
-
-    const dateParts = webReminderDate.trim().split("-"); // YYYY-MM-DD
-    const timeParts = webReminderTime.trim().split(":"); // HH:MM
-
-    if (dateParts.length !== 3 || timeParts.length !== 2) return null;
-
-    const [year, month, day] = dateParts.map(Number);
-    const [hour, minute] = timeParts.map(Number);
-
-    if ([year, month, day, hour, minute].some((n) => Number.isNaN(n))) {
-      return null;
-    }
-
-    const composed = new Date(year, month - 1, day, hour, minute);
-    return Number.isNaN(composed.getTime()) ? null : composed;
-  };
 
   const resetForm = () => {
     setTitle("");
     setSubject("");
-    setDeadline("");
     setDescription("");
     setPriority("medium");
-    setReminderDateTime(null);
-    setWebReminderDate("");
-    setWebReminderTime("");
+    setDeadlineDate(null);
+    setWebDeadlineText("");
+    setReminders([]);
     setErrors({});
   };
 
   const handleSave = useCallback(async () => {
-    if (isSaving) return; // guard against double-tap
+    if (isSaving) return;
 
     const fieldErrors = {};
     if (!title.trim()) fieldErrors.title = "Title is required";
     if (!subject.trim()) fieldErrors.subject = "Subject is required";
-    if (!deadline.trim()) fieldErrors.deadline = "Deadline is required";
+
+    let finalDeadline = deadlineDate;
+    if (isWeb) {
+      finalDeadline = normalizeDayFirstDate(webDeadlineText);
+      if (!webDeadlineText.trim()) fieldErrors.deadline = "Deadline is required";
+      else if (!finalDeadline) fieldErrors.deadline = "Use DD-MM-YYYY, e.g. 20-07-2026";
+    } else if (!finalDeadline) {
+      fieldErrors.deadline = "Deadline is required";
+    }
 
     if (Object.keys(fieldErrors).length > 0) {
       setErrors(fieldErrors);
-      Alert.alert("Missing Fields", "Please fill in title, subject, and deadline.");
+      Alert.alert("Missing Fields", "Please check the highlighted fields.");
       return;
     }
 
-    const normalizedDeadline = normalizeDeadline(deadline);
+    // Resolve reminders — skip rows the user never finished filling in.
+    const resolvedReminders = [];
+    for (let i = 0; i < reminders.length; i++) {
+      const r = reminders[i];
+      let dateTime = r.dateTime;
 
-    if (!normalizedDeadline) {
-      setErrors({ deadline: "Enter a valid date (e.g. 2026-07-20)" });
-      Alert.alert(
-        "Invalid Deadline",
-        "Deadline must be a valid date like 2026-07-20 or 2026-7-20 (YYYY-M-D)."
-      );
-      return;
-    }
+      if (isWeb) {
+        if (!r.webDate.trim() && !r.webTime.trim()) continue; // untouched row, skip silently
+        const datePart = normalizeDayFirstDate(r.webDate);
+        const timeMatch = /^(\d{1,2}):(\d{2})$/.exec(r.webTime.trim());
+        if (!datePart || !timeMatch) {
+          Alert.alert(
+            "Invalid Reminder",
+            `Reminder ${i + 1}: use DD-MM-YYYY for date and HH:MM (24-hour) for time.`
+          );
+          return;
+        }
+        datePart.setHours(Number(timeMatch[1]), Number(timeMatch[2]));
+        dateTime = datePart;
+      } else if (!dateTime) {
+        continue; // row added but never picked, skip
+      }
 
-    let finalReminderDateTime = reminderDateTime;
-
-    if (isWeb && (webReminderDate.trim() || webReminderTime.trim())) {
-      const composed = buildWebReminderDate();
-      if (!composed) {
-        Alert.alert(
-          "Invalid Reminder",
-          "Please enter reminder date as YYYY-MM-DD and time as HH:MM (24-hour), e.g. 2026-07-19 and 14:30."
-        );
+      if (r.repeat === "none" && dateTime <= new Date()) {
+        Alert.alert("Invalid Reminder", `Reminder ${i + 1}: pick a time in the future.`);
         return;
       }
-      finalReminderDateTime = composed;
+
+      resolvedReminders.push({ dateTime, repeat: r.repeat });
     }
 
-    if (finalReminderDateTime && finalReminderDateTime <= new Date()) {
-      Alert.alert(
-        "Invalid Reminder",
-        "Reminder time must be in the future. Please pick a later time."
-      );
-      return;
-    }
-
-    const newAssignment = {
-      title: title.trim(),
-      subject: subject.trim(),
-      deadline: normalizedDeadline,
-      description: description.trim(),
-      priority,
-      status: "pending",
-      reminderDateTime: finalReminderDateTime || null,
-    };
+    const deadlineLabel = formatDDMMYYYY(finalDeadline);
 
     try {
       setIsSaving(true);
+
+      // scheduleAssignmentReminders() asks for permission (and alerts the
+      // user if denied) internally, so no need to duplicate that here.
+      const scheduledReminders = await scheduleAssignmentReminders(
+        { title: title.trim(), subject: subject.trim(), deadlineLabel },
+        resolvedReminders
+      );
+
+      const newAssignment = {
+        title: title.trim(),
+        subject: subject.trim(),
+        deadline: toISODate(finalDeadline),
+        description: description.trim(),
+        priority,
+        status: "pending",
+        reminderNotifications: scheduledReminders, // keep these to cancel later if needed
+      };
+
       await addAssignment(newAssignment);
       resetForm();
       Alert.alert("Success", "Assignment added successfully! 🎉");
@@ -272,24 +368,11 @@ export default function AddAssignmentScreen({ navigation, addAssignment }) {
     } finally {
       setIsSaving(false);
     }
-  }, [
-    isSaving,
-    title,
-    subject,
-    deadline,
-    description,
-    priority,
-    reminderDateTime,
-    webReminderDate,
-    webReminderTime,
-    addAssignment,
-    navigation,
-  ]);
+  }, [isSaving, title, subject, deadlineDate, webDeadlineText, description, priority, reminders, addAssignment, navigation]);
 
-  const hasReminder = useMemo(
-    () => Boolean(reminderDateTime || webReminderDate || webReminderTime),
-    [reminderDateTime, webReminderDate, webReminderTime]
-  );
+  const showNativePicker = activePicker && !isWeb;
+  const nativePickerMode =
+    activePicker?.type === "deadline" ? "date" : Platform.OS === "ios" ? "datetime" : pickerStage;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -299,153 +382,228 @@ export default function AddAssignmentScreen({ navigation, addAssignment }) {
         keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}
       >
         <ScrollView
-          contentContainerStyle={styles.container}
+          contentContainerStyle={[
+            styles.container,
+            { maxWidth: isTablet ? 640 : undefined, alignSelf: "center", width: "100%" },
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.heading}>Add New Assignment</Text>
-          <Text style={styles.subheading}>Enter assignment details below</Text>
+          <FadeInUp index={0}>
+            <LinearGradient
+              colors={["#2563eb", "#4f46e5"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.headerBanner}
+            >
+              <View style={styles.headerIconWrap}>
+                <Ionicons name="document-text" size={22} color="#fff" />
+              </View>
+              <View style={styles.flexShrink}>
+                <Text style={styles.heading}>Add New Assignment</Text>
+                <Text style={styles.subheading}>Enter assignment details below</Text>
+              </View>
+            </LinearGradient>
+          </FadeInUp>
 
-          <FormField label="Assignment Title" error={errors.title}>
-            <TextInput
-              style={[styles.input, errors.title && styles.inputError]}
-              placeholder="e.g. Chapter 5 Problem Set"
-              placeholderTextColor="#94a3b8"
-              value={title}
-              onChangeText={handleTitleChange}
-              returnKeyType="next"
-              accessibilityLabel="Assignment title"
-            />
-          </FormField>
+          <FadeInUp index={1}>
+            <FormField label="Assignment Title" error={errors.title}>
+              <TextInput
+                style={[styles.input, errors.title && styles.inputError]}
+                placeholder="e.g. Chapter 5 Problem Set"
+                placeholderTextColor="#94a3b8"
+                value={title}
+                onChangeText={handleTitleChange}
+                returnKeyType="next"
+                accessibilityLabel="Assignment title"
+              />
+            </FormField>
+          </FadeInUp>
 
-          <FormField label="Subject" error={errors.subject}>
-            <TextInput
-              style={[styles.input, errors.subject && styles.inputError]}
-              placeholder="e.g. Mathematics"
-              placeholderTextColor="#94a3b8"
-              value={subject}
-              onChangeText={handleSubjectChange}
-              returnKeyType="next"
-              accessibilityLabel="Subject"
-            />
-          </FormField>
+          <FadeInUp index={2}>
+            <FormField label="Subject" error={errors.subject}>
+              <TextInput
+                style={[styles.input, errors.subject && styles.inputError]}
+                placeholder="e.g. Mathematics"
+                placeholderTextColor="#94a3b8"
+                value={subject}
+                onChangeText={handleSubjectChange}
+                returnKeyType="next"
+                accessibilityLabel="Subject"
+              />
+            </FormField>
+          </FadeInUp>
 
-          <FormField label="Deadline" error={errors.deadline}>
-            <TextInput
-              style={[styles.input, errors.deadline && styles.inputError]}
-              placeholder="2026-07-20 or 2026-7-20"
-              placeholderTextColor="#94a3b8"
-              value={deadline}
-              onChangeText={handleDeadlineChange}
-              keyboardType={Platform.OS === "ios" ? "numbers-and-punctuation" : "default"}
-              returnKeyType="next"
-              accessibilityLabel="Deadline date"
-            />
-          </FormField>
+          <FadeInUp index={3}>
+            <FormField label="Deadline" error={errors.deadline}>
+              {isWeb ? (
+                <TextInput
+                  style={[styles.input, errors.deadline && styles.inputError]}
+                  placeholder="DD-MM-YYYY, e.g. 20-07-2026"
+                  placeholderTextColor="#94a3b8"
+                  value={webDeadlineText}
+                  onChangeText={handleWebDeadlineChange}
+                  returnKeyType="next"
+                  accessibilityLabel="Deadline date, day month year"
+                />
+              ) : (
+                <TouchableOpacity
+                  style={[styles.dateButton, errors.deadline && styles.inputError]}
+                  onPress={openDeadlinePicker}
+                  accessibilityRole="button"
+                  accessibilityLabel="Pick deadline date"
+                >
+                  <Ionicons name="calendar-outline" size={18} color="#1d4ed8" />
+                  <Text style={[styles.dateButtonText, !deadlineDate && styles.placeholderText]}>
+                    {deadlineDate ? formatDDMMYYYY(deadlineDate) : "Select date (Day - Month - Year)"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </FormField>
+          </FadeInUp>
 
-          <FormField label="Priority">
-            <View style={styles.priorityRow}>
-              {PRIORITIES.map((p) => {
-                const selected = priority === p.value;
-                return (
-                  <TouchableOpacity
-                    key={p.value}
-                    style={[
-                      styles.priorityChip,
-                      {
-                        backgroundColor: selected ? p.bg : "#f8fafc",
-                        borderColor: selected ? p.color : "#e2e8f0",
-                      },
-                    ]}
-                    onPress={() => setPriority(p.value)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${p.label} priority`}
-                    accessibilityState={{ selected }}
-                  >
-                    <View style={[styles.priorityDot, { backgroundColor: p.color }]} />
-                    <Text
+          <FadeInUp index={4}>
+            <FormField label="Priority">
+              <View style={styles.priorityRow}>
+                {PRIORITIES.map((p) => {
+                  const selected = priority === p.value;
+                  return (
+                    <ScaleButton
+                      key={p.value}
                       style={[
-                        styles.priorityChipText,
-                        { color: selected ? p.color : "#64748b" },
+                        styles.priorityChip,
+                        { backgroundColor: selected ? p.bg : "#f8fafc", borderColor: selected ? p.color : "#e2e8f0" },
                       ]}
+                      onPress={() => setPriority(p.value)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${p.label} priority`}
+                      accessibilityState={{ selected }}
                     >
-                      {p.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </FormField>
+                      <View style={styles.priorityChipInner}>
+                        <View style={[styles.priorityDot, { backgroundColor: p.color }]} />
+                        <Text style={[styles.priorityChipText, { color: selected ? p.color : "#64748b" }]}>
+                          {p.label}
+                        </Text>
+                      </View>
+                    </ScaleButton>
+                  );
+                })}
+              </View>
+            </FormField>
+          </FadeInUp>
 
-          <FormField label="Description (optional)">
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              placeholder="Write assignment details"
-              placeholderTextColor="#94a3b8"
-              value={description}
-              onChangeText={setDescription}
-              multiline
-              accessibilityLabel="Description"
-            />
-          </FormField>
+          <FadeInUp index={5}>
+            <FormField label="Description (optional)">
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                placeholder="Write assignment details"
+                placeholderTextColor="#94a3b8"
+                value={description}
+                onChangeText={setDescription}
+                multiline
+                accessibilityLabel="Description"
+              />
+            </FormField>
+          </FadeInUp>
 
-          <FormField label="Reminder (optional)">
-            {isWeb ? (
-              <>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Reminder date - YYYY-MM-DD (e.g. 2026-07-19)"
-                  placeholderTextColor="#94a3b8"
-                  value={webReminderDate}
-                  onChangeText={setWebReminderDate}
-                  accessibilityLabel="Reminder date"
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Reminder time - HH:MM, 24-hour (e.g. 14:30)"
-                  placeholderTextColor="#94a3b8"
-                  value={webReminderTime}
-                  onChangeText={setWebReminderTime}
-                  accessibilityLabel="Reminder time"
-                />
-              </>
-            ) : (
+          <FadeInUp index={6}>
+            <FormField label="Reminders (optional)">
+              <Text style={styles.helperText}>
+                Add one or more reminders. Set a reminder to repeat Daily or Weekly if you want
+                recurring nudges instead of a one-time alert.
+              </Text>
+
+              {reminders.map((reminder, i) => (
+                <View key={reminder.id} style={styles.reminderRow}>
+                  <View style={styles.reminderRowTop}>
+                    <Text style={styles.reminderIndex}>Reminder {i + 1}</Text>
+                    <TouchableOpacity
+                      onPress={() => removeReminder(reminder.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove reminder ${i + 1}`}
+                      hitSlop={8}
+                    >
+                      <Ionicons name="trash-outline" size={16} color="#dc2626" />
+                    </TouchableOpacity>
+                  </View>
+
+                  {isWeb ? (
+                    <View style={styles.webReminderInputs}>
+                      <TextInput
+                        style={[styles.input, styles.webReminderInput]}
+                        placeholder="DD-MM-YYYY"
+                        placeholderTextColor="#94a3b8"
+                        value={reminder.webDate}
+                        onChangeText={(v) => updateReminder(reminder.id, { webDate: v })}
+                        accessibilityLabel={`Reminder ${i + 1} date`}
+                      />
+                      <TextInput
+                        style={[styles.input, styles.webReminderInput]}
+                        placeholder="HH:MM"
+                        placeholderTextColor="#94a3b8"
+                        value={reminder.webTime}
+                        onChangeText={(v) => updateReminder(reminder.id, { webTime: v })}
+                        accessibilityLabel={`Reminder ${i + 1} time`}
+                      />
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.dateButton}
+                      onPress={() => openReminderPicker(reminder.id, reminder.dateTime)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Pick date and time for reminder ${i + 1}`}
+                    >
+                      <Ionicons
+                        name={reminder.dateTime ? "notifications" : "notifications-outline"}
+                        size={18}
+                        color="#1d4ed8"
+                      />
+                      <Text style={[styles.dateButtonText, !reminder.dateTime && styles.placeholderText]}>
+                        {reminder.dateTime
+                          ? `${formatDDMMYYYY(reminder.dateTime)} at ${formatTime(reminder.dateTime)}`
+                          : "Select date & time"}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  <View style={styles.repeatRow}>
+                    {REPEAT_OPTIONS.map((opt) => {
+                      const active = reminder.repeat === opt.value;
+                      return (
+                        <TouchableOpacity
+                          key={opt.value}
+                          style={[styles.repeatChip, active && styles.repeatChipActive]}
+                          onPress={() => updateReminder(reminder.id, { repeat: opt.value })}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Repeat ${opt.label}`}
+                          accessibilityState={{ selected: active }}
+                        >
+                          <Text style={[styles.repeatChipText, active && styles.repeatChipTextActive]}>
+                            {opt.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              ))}
+
               <TouchableOpacity
-                style={styles.reminderButton}
-                onPress={openReminderPicker}
+                style={styles.addReminderButton}
+                onPress={addReminder}
                 accessibilityRole="button"
-                accessibilityLabel="Set reminder date and time"
+                accessibilityLabel="Add another reminder"
               >
-                <Ionicons
-                  name={reminderDateTime ? "notifications" : "notifications-outline"}
-                  size={18}
-                  color="#1d4ed8"
-                />
-                <Text style={styles.reminderButtonText}>
-                  {reminderDateTime
-                    ? formatReminderLabel(reminderDateTime)
-                    : "Set Reminder Date & Time"}
-                </Text>
+                <Ionicons name="add-circle-outline" size={18} color="#1d4ed8" />
+                <Text style={styles.addReminderText}>Add Reminder</Text>
               </TouchableOpacity>
-            )}
+            </FormField>
+          </FadeInUp>
 
-            {hasReminder && (
-              <TouchableOpacity
-                style={styles.clearReminderButton}
-                onPress={clearReminder}
-                accessibilityRole="button"
-                accessibilityLabel="Remove reminder"
-              >
-                <Ionicons name="close-circle-outline" size={14} color="#dc2626" />
-                <Text style={styles.clearReminderText}>Remove Reminder</Text>
-              </TouchableOpacity>
-            )}
-          </FormField>
-
-          {pickerMode && Platform.OS === "android" && (
+          {showNativePicker && Platform.OS === "android" && (
             <DateTimePicker
               value={tempPickerDate}
-              mode={pickerMode}
+              mode={nativePickerMode}
               is24Hour={false}
               display="default"
               onChange={handlePickerChange}
@@ -454,21 +612,19 @@ export default function AddAssignmentScreen({ navigation, addAssignment }) {
             />
           )}
 
-          {pickerMode && Platform.OS === "ios" && (
+          {showNativePicker && Platform.OS === "ios" && (
             <View style={styles.iosPickerCard}>
               <View style={styles.iosPickerHeader}>
-                <Text style={styles.iosPickerTitle}>Set Reminder</Text>
-                <TouchableOpacity
-                  onPress={closePicker}
-                  accessibilityRole="button"
-                  accessibilityLabel="Done setting reminder"
-                >
+                <Text style={styles.iosPickerTitle}>
+                  {activePicker.type === "deadline" ? "Set Deadline" : "Set Reminder"}
+                </Text>
+                <TouchableOpacity onPress={closePicker} accessibilityRole="button" accessibilityLabel="Done">
                   <Text style={styles.iosPickerDone}>Done</Text>
                 </TouchableOpacity>
               </View>
               <DateTimePicker
                 value={tempPickerDate}
-                mode="datetime"
+                mode={nativePickerMode}
                 display="spinner"
                 onChange={handlePickerChange}
                 minimumDate={new Date()}
@@ -479,23 +635,27 @@ export default function AddAssignmentScreen({ navigation, addAssignment }) {
             </View>
           )}
 
-          <TouchableOpacity
-            style={[styles.saveButton, isSaving && styles.saveButtonDisabled]}
-            onPress={handleSave}
-            disabled={isSaving}
-            accessibilityRole="button"
-            accessibilityLabel="Save assignment"
-            accessibilityState={{ disabled: isSaving }}
-          >
-            {isSaving ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="checkmark-circle" size={19} color="#fff" />
-                <Text style={styles.saveButtonText}>Save Assignment</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          <FadeInUp index={7}>
+            <ScaleButton
+              style={[styles.saveButton, isSaving && styles.saveButtonDisabled]}
+              onPress={handleSave}
+              disabled={isSaving}
+              accessibilityRole="button"
+              accessibilityLabel="Save assignment"
+              accessibilityState={{ disabled: isSaving }}
+            >
+              <View style={styles.buttonInner}>
+                {isSaving ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={19} color="#fff" />
+                    <Text style={styles.saveButtonText}>Save Assignment</Text>
+                  </>
+                )}
+              </View>
+            </ScaleButton>
+          </FadeInUp>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -503,37 +663,36 @@ export default function AddAssignmentScreen({ navigation, addAssignment }) {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-  },
-  flex: {
-    flex: 1,
-  },
-  container: {
-    padding: 20,
-    paddingBottom: 40,
-  },
-  heading: {
-    fontSize: 26,
-    fontWeight: "800",
-    color: "#0f172a",
-    marginBottom: 4,
-  },
-  subheading: {
-    fontSize: 14,
-    color: "#64748b",
+  safeArea: { flex: 1, backgroundColor: "#f8fafc" },
+  flex: { flex: 1 },
+  flexShrink: { flexShrink: 1 },
+  container: { padding: 20, paddingBottom: 40 },
+  headerBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 18,
+    borderRadius: 20,
     marginBottom: 22,
+    shadowColor: "#4338ca",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 6,
   },
-  fieldWrap: {
-    marginBottom: 16,
+  headerIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  label: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#334155",
-    marginBottom: 8,
-  },
+  heading: { fontSize: 20, fontWeight: "800", color: "#fff", marginBottom: 2 },
+  subheading: { fontSize: 13, color: "#dbeafe" },
+  fieldWrap: { marginBottom: 16 },
+  label: { fontSize: 14, fontWeight: "600", color: "#334155", marginBottom: 8 },
+  helperText: { fontSize: 12, color: "#64748b", marginBottom: 10, lineHeight: 17 },
   input: {
     backgroundColor: "#fff",
     borderRadius: 12,
@@ -544,52 +703,13 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: "#e2e8f0",
   },
-  inputError: {
-    borderColor: "#fca5a5",
-    backgroundColor: "#fef2f2",
-  },
-  errorRow: {
+  inputError: { borderColor: "#fca5a5", backgroundColor: "#fef2f2" },
+  errorRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 },
+  errorText: { fontSize: 12, color: "#dc2626", fontWeight: "500" },
+  textArea: { minHeight: 110, textAlignVertical: "top" },
+  dateButton: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    marginTop: 6,
-  },
-  errorText: {
-    fontSize: 12,
-    color: "#dc2626",
-    fontWeight: "500",
-  },
-  textArea: {
-    minHeight: 110,
-    textAlignVertical: "top",
-  },
-  priorityRow: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  priorityChip: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1.5,
-  },
-  priorityDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  priorityChipText: {
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  reminderButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
     gap: 8,
     backgroundColor: "#eff6ff",
     borderRadius: 12,
@@ -598,23 +718,57 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#bfdbfe",
   },
-  reminderButtonText: {
-    color: "#1d4ed8",
-    fontSize: 14,
-    fontWeight: "600",
+  dateButtonText: { color: "#1d4ed8", fontSize: 14, fontWeight: "600" },
+  placeholderText: { color: "#60a5fa", fontWeight: "500" },
+  priorityRow: { flexDirection: "row", gap: 8 },
+  priorityChip: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1.5,
   },
-  clearReminderButton: {
+  priorityChipInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  priorityDot: { width: 8, height: 8, borderRadius: 4 },
+  priorityChipText: { fontSize: 13, fontWeight: "700" },
+  reminderRow: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  reminderRowTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  reminderIndex: { fontSize: 12, fontWeight: "700", color: "#64748b" },
+  webReminderInputs: { flexDirection: "row", gap: 8 },
+  webReminderInput: { flex: 1 },
+  repeatRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  repeatChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#f1f5f9",
+  },
+  repeatChipActive: { backgroundColor: "#2563eb" },
+  repeatChipText: { fontSize: 12, fontWeight: "700", color: "#64748b" },
+  repeatChipTextActive: { color: "#fff" },
+  addReminderButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 4,
-    marginTop: 10,
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#bfdbfe",
+    borderStyle: "dashed",
   },
-  clearReminderText: {
-    color: "#dc2626",
-    fontSize: 13,
-    fontWeight: "600",
-  },
+  addReminderText: { color: "#1d4ed8", fontSize: 13, fontWeight: "700" },
   iosPickerCard: {
     backgroundColor: "#fff",
     borderRadius: 14,
@@ -632,25 +786,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
   },
-  iosPickerTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#334155",
-  },
-  iosPickerDone: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#2563eb",
-  },
-  iosPicker: {
-    backgroundColor: "#fff",
-    height: 180,
-  },
+  iosPickerTitle: { fontSize: 14, fontWeight: "700", color: "#334155" },
+  iosPickerDone: { fontSize: 14, fontWeight: "700", color: "#2563eb" },
+  iosPicker: { backgroundColor: "#fff", height: 180 },
+  buttonInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   saveButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
     backgroundColor: "#2563eb",
     paddingVertical: 15,
     borderRadius: 12,
@@ -661,12 +801,6 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
-  saveButtonDisabled: {
-    opacity: 0.7,
-  },
-  saveButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-  },
+  saveButtonDisabled: { opacity: 0.7 },
+  saveButtonText: { color: "#fff", fontSize: 16, fontWeight: "700" },
 });
