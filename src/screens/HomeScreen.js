@@ -10,24 +10,107 @@ import {
   FlatList,
   Animated,
   Easing,
-  LayoutAnimation,
-  Platform,
-  UIManager,
   useWindowDimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Haptics from "expo-haptics";
 
-// Android needs this flag before LayoutAnimation works.
-if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
+/* ------------------------------------------------------------------ */
+/* Design tokens — kept in this file so there's nothing extra to wire  */
+/* up. If you add more screens later, pulling these into a shared      */
+/* theme.js file is worth it then, but not required now.               */
+/* ------------------------------------------------------------------ */
+const colors = {
+  primary: "#2563eb",
+  primaryDark: "#1d4ed8",
+  primarySoft: "#eff6ff",
+  gradientStart: "#2563eb",
+  gradientEnd: "#4f46e5",
+  bg: "#f8fafc",
+  surface: "#ffffff",
+  surfaceMuted: "#f1f5f9",
+  border: "#e2e8f0",
+  textPrimary: "#0f172a",
+  textSecondary: "#64748b",
+  textMuted: "#94a3b8",
+  textOnPrimary: "#ffffff",
+  textOnPrimarySoft: "#dbeafe",
+  success: "#16a34a",
+  successBg: "#f0fdf4",
+  warning: "#d97706",
+  warningBg: "#fffbeb",
+  danger: "#dc2626",
+  dangerBg: "#fef2f2",
+  dangerBorder: "#fecaca",
+  info: "#2563eb",
+  infoBg: "#eff6ff",
+  pending: "#f97316",
+  pendingBg: "#fff7ed",
+};
+
+const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 28 };
+const radius = { sm: 8, md: 12, lg: 16, xl: 20, pill: 999 };
+
+const type = {
+  display: { fontSize: 28, fontWeight: "800", letterSpacing: -0.4 },
+  title: { fontSize: 19, fontWeight: "800", letterSpacing: -0.2 },
+  subtitle: { fontSize: 14, fontWeight: "500" },
+  body: { fontSize: 15, fontWeight: "500" },
+  label: { fontSize: 13, fontWeight: "700" },
+  caption: { fontSize: 12, fontWeight: "600" },
+  tiny: { fontSize: 10, fontWeight: "700" },
+};
+
+const shadow = {
+  sm: {
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  md: {
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  colored: (hex) => ({
+    shadowColor: hex,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 5,
+  }),
+};
+
+const breakpoints = { small: 360, tablet: 768 };
+
+function getResponsiveMetrics(width) {
+  const isSmall = width < breakpoints.small;
+  const isTablet = width >= breakpoints.tablet;
+  return {
+    isSmall,
+    isTablet,
+    horizontalPadding: isTablet ? 32 : isSmall ? 16 : 20,
+    maxContentWidth: isTablet ? 900 : undefined,
+    columns: isTablet ? 2 : 1,
+  };
 }
 
+// Fires a haptic tick where supported; silently no-ops on web / unsupported
+// devices instead of throwing, so this is always safe to call.
+const tap = (style = Haptics.ImpactFeedbackStyle.Light) => {
+  Haptics.impactAsync(style).catch(() => {});
+};
+
 const PRIORITY_META = {
-  low: { color: "#16a34a", bg: "#f0fdf4", label: "Low" },
-  medium: { color: "#d97706", bg: "#fffbeb", label: "Medium" },
-  high: { color: "#dc2626", bg: "#fef2f2", label: "High" },
+  low: { color: colors.success, bg: colors.successBg, label: "Low" },
+  medium: { color: colors.warning, bg: colors.warningBg, label: "Medium" },
+  high: { color: colors.danger, bg: colors.dangerBg, label: "High" },
 };
 
 const FILTERS = [
@@ -45,10 +128,10 @@ const getCountdownInfo = (deadline) => {
 
   const diff = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
 
-  if (diff < 0) return { label: "Overdue", icon: "alert-circle", color: "#dc2626" };
-  if (diff === 0) return { label: "Due Today", icon: "flame", color: "#dc2626" };
-  if (diff === 1) return { label: "1 Day Left", icon: "time", color: "#d97706" };
-  return { label: `${diff} Days Left`, icon: "time-outline", color: "#2563eb" };
+  if (diff < 0) return { label: "Overdue", icon: "alert-circle", color: colors.danger };
+  if (diff === 0) return { label: "Due Today", icon: "flame", color: colors.danger };
+  if (diff === 1) return { label: "1 Day Left", icon: "time", color: colors.warning };
+  return { label: `${diff} Days Left`, icon: "time-outline", color: colors.info };
 };
 
 const isAssignmentOverdue = (assignment) => {
@@ -61,13 +144,22 @@ const isAssignmentOverdue = (assignment) => {
   return assignment.status === "pending" && deadlineDate < today;
 };
 
+const getGreeting = () => {
+  const hour = new Date().getHours();
+  if (hour < 5) return "Still up?";
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  if (hour < 21) return "Good evening";
+  return "Good night";
+};
+
 /* ------------------------------------------------------------------ */
 /* Reusable animated progress bar — animates width whenever % changes  */
 /* ------------------------------------------------------------------ */
 const AnimatedProgressBar = React.memo(function AnimatedProgressBar({
   percentage,
   trackStyle,
-  fillColor = "#fff",
+  fillColor = colors.surface,
   height = 8,
 }) {
   const anim = useRef(new Animated.Value(0)).current;
@@ -97,9 +189,47 @@ const AnimatedProgressBar = React.memo(function AnimatedProgressBar({
 });
 
 /* ------------------------------------------------------------------ */
+/* Stat card — mounts with a gentle scale+fade, staggered by index     */
+/* ------------------------------------------------------------------ */
+const StatCard = React.memo(function StatCard({ icon, iconBg, iconColor, number, label, index }) {
+  const entrance = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(entrance, {
+      toValue: 1,
+      duration: 380,
+      delay: 120 + index * 70,
+      easing: Easing.out(Easing.back(1.2)),
+      useNativeDriver: true,
+    }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <Animated.View
+      style={[
+        styles.statCard,
+        {
+          opacity: entrance,
+          transform: [
+            { scale: entrance.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }) },
+          ],
+        },
+      ]}
+    >
+      <View style={[styles.statIconWrap, { backgroundColor: iconBg }]}>
+        <Ionicons name={icon} size={18} color={iconColor} />
+      </View>
+      <Text style={styles.statNumber}>{number}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </Animated.View>
+  );
+});
+
+/* ------------------------------------------------------------------ */
 /* Assignment card — press feedback + staggered entrance animation     */
 /* ------------------------------------------------------------------ */
-const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress, index }) {
+const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress, index, columns }) {
   const overdue = isAssignmentOverdue(assignment);
   const isCompleted = assignment.status === "completed";
 
@@ -110,7 +240,7 @@ const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress,
     Animated.timing(entrance, {
       toValue: 1,
       duration: 320,
-      delay: Math.min(index * 45, 350),
+      delay: Math.min((index % 12) * 40, 350),
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
@@ -124,11 +254,11 @@ const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress,
     Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 6 }).start();
   };
 
-  let badgeMeta = { label: "Pending", color: "#f97316", bg: "#fff7ed" };
+  let badgeMeta = { label: "Pending", color: colors.pending, bg: colors.pendingBg };
   if (overdue) {
-    badgeMeta = { label: "Overdue", color: "#dc2626", bg: "#fef2f2" };
+    badgeMeta = { label: "Overdue", color: colors.danger, bg: colors.dangerBg };
   } else if (isCompleted) {
-    badgeMeta = { label: "Completed", color: "#16a34a", bg: "#f0fdf4" };
+    badgeMeta = { label: "Completed", color: colors.success, bg: colors.successBg };
   }
 
   const countdown = getCountdownInfo(assignment.deadline);
@@ -136,16 +266,22 @@ const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress,
 
   return (
     <Animated.View
-      style={{
-        opacity: entrance,
-        transform: [
-          { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) },
-          { scale },
-        ],
-      }}
+      style={[
+        columns > 1 && styles.gridItem,
+        {
+          opacity: entrance,
+          transform: [
+            { translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) },
+            { scale },
+          ],
+        },
+      ]}
     >
       <Pressable
-        onPress={() => onPress(assignment)}
+        onPress={() => {
+          tap();
+          onPress(assignment);
+        }}
         onPressIn={handlePressIn}
         onPressOut={handlePressOut}
         style={styles.assignmentCard}
@@ -189,8 +325,8 @@ const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress,
           <AnimatedProgressBar
             percentage={100}
             height={3}
-            fillColor="#16a34a"
-            trackStyle={{ backgroundColor: "#f1f5f9", marginTop: 10 }}
+            fillColor={colors.success}
+            trackStyle={{ backgroundColor: colors.surfaceMuted, marginTop: 10 }}
           />
         )}
       </Pressable>
@@ -199,7 +335,8 @@ const AssignmentCard = React.memo(function AssignmentCard({ assignment, onPress,
 });
 
 /* ------------------------------------------------------------------ */
-/* Filter tabs with a sliding pill indicator                           */
+/* Filter tabs with a sliding pill indicator — pure Animated, no       */
+/* LayoutAnimation, so there's exactly one animation system driving it */
 /* ------------------------------------------------------------------ */
 function FilterTabs({ activeFilter, onChange }) {
   const [layouts, setLayouts] = useState({});
@@ -211,7 +348,7 @@ function FilterTabs({ activeFilter, onChange }) {
     (key, immediate = false) => {
       const layout = layouts[key];
       if (!layout) return;
-      const anims = [
+      Animated.parallel([
         Animated.timing(indicatorX, {
           toValue: layout.x,
           duration: immediate ? 0 : 260,
@@ -224,8 +361,7 @@ function FilterTabs({ activeFilter, onChange }) {
           easing: Easing.out(Easing.cubic),
           useNativeDriver: false,
         }),
-      ];
-      Animated.parallel(anims).start();
+      ]).start();
     },
     [layouts, indicatorX, indicatorW]
   );
@@ -259,7 +395,7 @@ function FilterTabs({ activeFilter, onChange }) {
               setLayouts((prev) => ({ ...prev, [filter.key]: { x, width } }));
             }}
             onPress={() => {
-              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              if (filter.key !== activeFilter) tap();
               onChange(filter.key);
             }}
             activeOpacity={0.7}
@@ -280,12 +416,15 @@ function FilterTabs({ activeFilter, onChange }) {
 /* ------------------------------------------------------------------ */
 /* Small press-scale wrapper for the primary / secondary buttons       */
 /* ------------------------------------------------------------------ */
-function ScaleButton({ onPress, style, children, ...rest }) {
+function ScaleButton({ onPress, style, children, haptic = true, ...rest }) {
   const scale = useRef(new Animated.Value(1)).current;
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <Pressable
-        onPress={onPress}
+        onPress={() => {
+          if (haptic) tap();
+          onPress?.();
+        }}
         onPressIn={() =>
           Animated.spring(scale, { toValue: 0.96, useNativeDriver: true, speed: 40, bounciness: 4 }).start()
         }
@@ -301,17 +440,105 @@ function ScaleButton({ onPress, style, children, ...rest }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Fade + slide wrapper for content that should ease in on mount       */
+/* (alert strip, empty state) instead of popping in instantly          */
+/* ------------------------------------------------------------------ */
+function FadeInView({ visible, style, children, duration = 260 }) {
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(anim, {
+      toValue: visible ? 1 : 0,
+      duration,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [visible, anim, duration]);
+
+  if (!visible) return null;
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity: anim,
+          transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [-6, 0] }) }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Search input with an animated focus ring — subtle but reads premium */
+/* ------------------------------------------------------------------ */
+function SearchBar({ value, onChangeText }) {
+  const [focused, setFocused] = useState(false);
+  const focusAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(focusAnim, {
+      toValue: focused ? 1 : 0,
+      duration: 180,
+      useNativeDriver: false, // animating borderColor, not a transform
+    }).start();
+  }, [focused, focusAnim]);
+
+  const borderColor = focusAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [colors.border, colors.primary],
+  });
+
+  return (
+    <Animated.View style={[styles.searchWrap, { borderColor }]}>
+      <Ionicons
+        name="search-outline"
+        size={18}
+        color={focused ? colors.primary : colors.textMuted}
+        style={styles.searchIcon}
+      />
+      <TextInput
+        style={styles.searchInput}
+        placeholder="Search assignments..."
+        placeholderTextColor={colors.textMuted}
+        value={value}
+        onChangeText={onChangeText}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        accessibilityLabel="Search assignments"
+        returnKeyType="search"
+      />
+      {value.length > 0 && (
+        <TouchableOpacity
+          onPress={() => onChangeText("")}
+          accessibilityRole="button"
+          accessibilityLabel="Clear search"
+          hitSlop={8}
+        >
+          <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+        </TouchableOpacity>
+      )}
+    </Animated.View>
+  );
+}
+
 export default function HomeScreen({ navigation, assignments, resetAssignments }) {
   const [searchText, setSearchText] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
   const { width } = useWindowDimensions();
 
-  // Responsive breakpoints — tablets/large screens get roomier spacing
-  // and a 4-column stat row instead of squeezing 3 cards edge to edge.
-  const isTablet = width >= 768;
-  const horizontalPadding = isTablet ? 32 : 20;
-  const maxContentWidth = isTablet ? 640 : undefined;
+  // Responsive: compact phones get tighter padding, tablets get a
+  // centered max-width column AND a 2-up grid so space isn't wasted.
+  const { horizontalPadding, maxContentWidth, columns } = useMemo(
+    () => getResponsiveMetrics(width),
+    [width]
+  );
 
+  const greeting = useMemo(() => getGreeting(), []);
   const totalAssignments = assignments.length;
 
   const pendingAssignments = useMemo(
@@ -386,8 +613,10 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
   const handleFilterChange = useCallback((key) => setActiveFilter(key), []);
 
   const renderItem = useCallback(
-    ({ item, index }) => <AssignmentCard assignment={item} onPress={handleOpenAssignment} index={index} />,
-    [handleOpenAssignment]
+    ({ item, index }) => (
+      <AssignmentCard assignment={item} onPress={handleOpenAssignment} index={index} columns={columns} />
+    ),
+    [handleOpenAssignment, columns]
   );
 
   const keyExtractor = useCallback((item) => item.id, []);
@@ -396,7 +625,8 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
     () => (
       <View>
         <View style={styles.headerRow}>
-          <View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.greeting}>{greeting}</Text>
             <Text style={styles.heading}>StudyMate</Text>
             <Text style={styles.subheading}>Manage your assignments and deadlines easily</Text>
           </View>
@@ -404,7 +634,7 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
 
         {/* Progress summary */}
         <LinearGradient
-          colors={["#2563eb", "#4f46e5"]}
+          colors={[colors.gradientStart, colors.gradientEnd]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.summaryBox}
@@ -416,7 +646,7 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
           <AnimatedProgressBar
             percentage={progressPercentage}
             trackStyle={{ backgroundColor: "rgba(255,255,255,0.25)", marginBottom: 10 }}
-            fillColor="#fff"
+            fillColor={colors.surface}
           />
           <Text style={styles.summarySubtext}>
             {completedAssignments} of {totalAssignments} assignments completed
@@ -425,52 +655,62 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
 
         {/* Stat cards */}
         <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <View style={[styles.statIconWrap, { backgroundColor: "#eff6ff" }]}>
-              <Ionicons name="list-outline" size={18} color="#2563eb" />
-            </View>
-            <Text style={styles.statNumber}>{totalAssignments}</Text>
-            <Text style={styles.statLabel}>Total</Text>
-          </View>
-
-          <View style={styles.statCard}>
-            <View style={[styles.statIconWrap, { backgroundColor: "#fff7ed" }]}>
-              <Ionicons name="hourglass-outline" size={18} color="#f97316" />
-            </View>
-            <Text style={styles.statNumber}>{pendingAssignments}</Text>
-            <Text style={styles.statLabel}>Pending</Text>
-          </View>
-
-          <View style={styles.statCard}>
-            <View style={[styles.statIconWrap, { backgroundColor: "#f0fdf4" }]}>
-              <Ionicons name="checkmark-circle-outline" size={18} color="#16a34a" />
-            </View>
-            <Text style={styles.statNumber}>{completedAssignments}</Text>
-            <Text style={styles.statLabel}>Done</Text>
-          </View>
+          <StatCard
+            index={0}
+            icon="list-outline"
+            iconBg={colors.infoBg}
+            iconColor={colors.info}
+            number={totalAssignments}
+            label="Total"
+          />
+          <StatCard
+            index={1}
+            icon="hourglass-outline"
+            iconBg={colors.pendingBg}
+            iconColor={colors.pending}
+            number={pendingAssignments}
+            label="Pending"
+          />
+          <StatCard
+            index={2}
+            icon="checkmark-circle-outline"
+            iconBg={colors.successBg}
+            iconColor={colors.success}
+            number={completedAssignments}
+            label="Done"
+          />
         </View>
 
-        {/* Due today / overdue alert strip — only shows when relevant */}
-        {(dueTodayCount > 0 || overdueCount > 0) && (
-          <View style={styles.alertRow}>
+        {/* Due today / overdue alert strip — fades in only when relevant */}
+        <FadeInView visible={dueTodayCount > 0 || overdueCount > 0} style={styles.alertRow}>
+          <>
             {dueTodayCount > 0 && (
-              <View style={[styles.alertChip, { backgroundColor: "#fff7ed" }]}>
-                <Ionicons name="flame" size={14} color="#d97706" />
-                <Text style={[styles.alertChipText, { color: "#d97706" }]}>{dueTodayCount} due today</Text>
+              <View style={[styles.alertChip, { backgroundColor: colors.warningBg }]}>
+                <Ionicons name="flame" size={14} color={colors.warning} />
+                <Text style={[styles.alertChipText, { color: colors.warning }]}>
+                  {dueTodayCount} due today
+                </Text>
               </View>
             )}
             {overdueCount > 0 && (
-              <View style={[styles.alertChip, { backgroundColor: "#fef2f2" }]}>
-                <Ionicons name="alert-circle" size={14} color="#dc2626" />
-                <Text style={[styles.alertChipText, { color: "#dc2626" }]}>{overdueCount} overdue</Text>
+              <View style={[styles.alertChip, { backgroundColor: colors.dangerBg }]}>
+                <Ionicons name="alert-circle" size={14} color={colors.danger} />
+                <Text style={[styles.alertChipText, { color: colors.danger }]}>
+                  {overdueCount} overdue
+                </Text>
               </View>
             )}
-          </View>
-        )}
+          </>
+        </FadeInView>
 
-        <ScaleButton style={styles.addButton} onPress={goToAdd} accessibilityRole="button" accessibilityLabel="Add new assignment">
+        <ScaleButton
+          style={styles.addButton}
+          onPress={goToAdd}
+          accessibilityRole="button"
+          accessibilityLabel="Add new assignment"
+        >
           <View style={styles.buttonInner}>
-            <Ionicons name="add-circle" size={20} color="#fff" />
+            <Ionicons name="add-circle" size={20} color={colors.textOnPrimary} />
             <Text style={styles.addButtonText}>Add Assignment</Text>
           </View>
         </ScaleButton>
@@ -478,36 +718,17 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
         <ScaleButton
           style={styles.resetButton}
           onPress={handleReset}
+          haptic={false}
           accessibilityRole="button"
           accessibilityLabel="Reset all assignments"
         >
           <View style={styles.buttonInner}>
-            <Ionicons name="refresh-outline" size={16} color="#dc2626" />
+            <Ionicons name="refresh-outline" size={16} color={colors.danger} />
             <Text style={styles.resetButtonText}>Reset All Assignments</Text>
           </View>
         </ScaleButton>
 
-        <View style={styles.searchWrap}>
-          <Ionicons name="search-outline" size={18} color="#94a3b8" style={styles.searchIcon} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search assignments..."
-            placeholderTextColor="#94a3b8"
-            value={searchText}
-            onChangeText={setSearchText}
-            accessibilityLabel="Search assignments"
-          />
-          {searchText.length > 0 && (
-            <TouchableOpacity
-              onPress={() => setSearchText("")}
-              accessibilityRole="button"
-              accessibilityLabel="Clear search"
-              hitSlop={8}
-            >
-              <Ionicons name="close-circle" size={18} color="#94a3b8" />
-            </TouchableOpacity>
-          )}
-        </View>
+        <SearchBar value={searchText} onChangeText={setSearchText} />
 
         <FilterTabs activeFilter={activeFilter} onChange={handleFilterChange} />
 
@@ -518,6 +739,7 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
       </View>
     ),
     [
+      greeting,
       progressPercentage,
       completedAssignments,
       totalAssignments,
@@ -535,11 +757,13 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
 
   const ListEmpty = useMemo(
     () => (
-      <View style={styles.emptyBox}>
-        <Ionicons name="file-tray-outline" size={40} color="#94a3b8" />
-        <Text style={styles.emptyTitle}>No assignments found</Text>
-        <Text style={styles.emptyText}>Try changing your search or filter, or add a new assignment.</Text>
-      </View>
+      <FadeInView visible style={styles.emptyBox}>
+        <>
+          <Ionicons name="file-tray-outline" size={40} color={colors.textMuted} />
+          <Text style={styles.emptyTitle}>No assignments found</Text>
+          <Text style={styles.emptyText}>Try changing your search or filter, or add a new assignment.</Text>
+        </>
+      </FadeInView>
     ),
     []
   );
@@ -547,9 +771,14 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
       <FlatList
+        // Key forces FlatList to remount when column count changes
+        // (e.g. phone <-> tablet / rotation), which RN requires for numColumns changes.
+        key={`cols-${columns}`}
         data={filteredAssignments}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
+        numColumns={columns}
+        columnWrapperStyle={columns > 1 ? styles.gridRow : undefined}
         ListHeaderComponent={ListHeader}
         ListEmptyComponent={ListEmpty}
         contentContainerStyle={[
@@ -570,106 +799,102 @@ export default function HomeScreen({ navigation, assignments, resetAssignments }
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f8fafc",
+    backgroundColor: colors.bg,
   },
   container: {
-    paddingTop: 20,
+    paddingTop: spacing.xl,
     paddingBottom: 40,
   },
   headerRow: {
-    marginBottom: 18,
+    marginBottom: spacing.xl - 2,
+  },
+  greeting: {
+    fontSize: type.subtitle.fontSize,
+    fontWeight: "600",
+    color: colors.primary,
+    marginBottom: 2,
   },
   heading: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: "#0f172a",
+    ...type.display,
+    color: colors.textPrimary,
     marginBottom: 4,
-    letterSpacing: -0.3,
   },
   subheading: {
     fontSize: 14,
-    color: "#64748b",
+    color: colors.textSecondary,
   },
   summaryBox: {
-    padding: 18,
-    borderRadius: 20,
-    marginBottom: 16,
-    shadowColor: "#4338ca",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 6,
+    padding: spacing.xl - 2,
+    borderRadius: radius.xl,
+    marginBottom: spacing.lg,
+    ...shadow.colored("#4338ca"),
   },
   summaryTopRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   summaryTitle: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#dbeafe",
+    color: colors.textOnPrimarySoft,
   },
   progressPercent: {
     fontSize: 22,
     fontWeight: "800",
-    color: "#fff",
+    color: colors.textOnPrimary,
   },
   summarySubtext: {
-    color: "#dbeafe",
+    color: colors.textOnPrimarySoft,
     fontSize: 13,
     fontWeight: "500",
   },
   statsContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 14,
+    gap: spacing.sm + 2,
+    marginBottom: spacing.md + 2,
   },
   statCard: {
     flex: 1,
-    backgroundColor: "#fff",
-    paddingVertical: 16,
-    borderRadius: 16,
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.lg,
+    borderRadius: radius.lg,
     alignItems: "center",
-    shadowColor: "#0f172a",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    elevation: 2,
+    ...shadow.sm,
   },
   statIconWrap: {
     width: 34,
     height: 34,
-    borderRadius: 10,
+    borderRadius: radius.sm + 2,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 8,
+    marginBottom: spacing.sm,
   },
   statNumber: {
     fontSize: 20,
     fontWeight: "800",
-    color: "#0f172a",
+    color: colors.textPrimary,
   },
   statLabel: {
     marginTop: 2,
-    color: "#64748b",
-    fontSize: 12,
-    fontWeight: "600",
+    color: colors.textSecondary,
+    ...type.caption,
   },
   alertRow: {
     flexDirection: "row",
-    gap: 8,
-    marginBottom: 14,
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginBottom: spacing.md + 2,
   },
   alertChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
     paddingVertical: 7,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill,
   },
   alertChipText: {
     fontSize: 12,
@@ -679,81 +904,77 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
+    gap: spacing.sm,
   },
   addButton: {
-    backgroundColor: "#2563eb",
-    paddingVertical: 14,
-    borderRadius: 12,
-    marginBottom: 10,
-    shadowColor: "#2563eb",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 3,
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.lg - 2,
+    borderRadius: radius.md,
+    marginBottom: spacing.sm + 2,
+    ...shadow.colored(colors.primary),
   },
   addButtonText: {
-    color: "#fff",
+    color: colors.textOnPrimary,
     fontSize: 16,
     fontWeight: "700",
   },
   resetButton: {
-    backgroundColor: "#fef2f2",
-    paddingVertical: 12,
-    borderRadius: 12,
-    marginBottom: 18,
+    backgroundColor: colors.dangerBg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    marginBottom: spacing.xl - 2,
     borderWidth: 1,
-    borderColor: "#fecaca",
+    borderColor: colors.dangerBorder,
   },
   resetButtonText: {
-    color: "#dc2626",
+    color: colors.danger,
     fontSize: 14,
     fontWeight: "700",
   },
   searchWrap: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.md + 2,
+    borderWidth: 1.5,
+    borderColor: colors.border,
   },
   searchIcon: {
-    marginRight: 8,
+    marginRight: spacing.sm,
   },
   searchInput: {
     flex: 1,
     paddingVertical: 13,
     fontSize: 15,
-    color: "#0f172a",
+    color: colors.textPrimary,
   },
   filterRow: {
     flexDirection: "row",
-    gap: 10,
-    marginBottom: 20,
+    gap: spacing.sm + 2,
+    marginBottom: spacing.xl,
     position: "relative",
-    backgroundColor: "#f1f5f9",
-    borderRadius: 12,
-    padding: 4,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    padding: spacing.xs,
   },
   filterIndicator: {
     position: "absolute",
-    top: 4,
-    bottom: 4,
+    top: spacing.xs,
+    bottom: spacing.xs,
     left: 0,
-    backgroundColor: "#2563eb",
-    borderRadius: 9,
-    shadowColor: "#2563eb",
-    shadowOffset: { width: 0, height: 2 },
+    backgroundColor: colors.primary,
+    borderRadius: radius.sm + 1,
+    ...shadow.colored(colors.primary),
     shadowOpacity: 0.25,
     shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
   filterButton: {
     flex: 1,
-    paddingVertical: 9,
+    paddingVertical: spacing.sm + 1,
     alignItems: "center",
     zIndex: 1,
   },
@@ -763,39 +984,42 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   activeFilterButtonText: {
-    color: "#fff",
+    color: colors.textOnPrimary,
   },
   sectionTitleRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 14,
+    marginBottom: spacing.md + 2,
   },
   sectionTitle: {
-    fontSize: 19,
-    fontWeight: "800",
-    color: "#0f172a",
+    ...type.title,
+    color: colors.textPrimary,
   },
   sectionCount: {
     fontSize: 13,
     fontWeight: "700",
-    color: "#94a3b8",
-    backgroundColor: "#f1f5f9",
-    paddingHorizontal: 10,
+    color: colors.textMuted,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.sm + 2,
     paddingVertical: 3,
-    borderRadius: 12,
+    borderRadius: radius.pill,
+  },
+  // Tablet grid support — FlatList's columnWrapperStyle needs a gap between
+  // columns, and each item needs a flexBasis so cards line up evenly.
+  gridRow: {
+    gap: spacing.md,
+  },
+  gridItem: {
+    flex: 1,
   },
   assignmentCard: {
-    backgroundColor: "#fff",
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 12,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    marginBottom: spacing.md,
     overflow: "hidden",
-    shadowColor: "#0f172a",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    ...shadow.sm,
   },
   overdueStripe: {
     position: "absolute",
@@ -803,28 +1027,28 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     width: 4,
-    backgroundColor: "#dc2626",
+    backgroundColor: colors.danger,
   },
   cardTopRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 4,
-    gap: 8,
+    gap: spacing.sm,
   },
   assignmentTitle: {
     flex: 1,
     fontSize: 16,
     fontWeight: "700",
-    color: "#0f172a",
+    color: colors.textPrimary,
   },
   priorityPill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    paddingHorizontal: 8,
+    paddingHorizontal: spacing.sm,
     paddingVertical: 3,
-    borderRadius: 8,
+    borderRadius: radius.sm,
   },
   priorityDot: {
     width: 6,
@@ -832,13 +1056,12 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   priorityText: {
-    fontSize: 10,
-    fontWeight: "700",
+    ...type.tiny,
   },
   assignmentMeta: {
     fontSize: 13,
-    color: "#64748b",
-    marginBottom: 10,
+    color: colors.textSecondary,
+    marginBottom: spacing.sm + 2,
   },
   cardBottomRow: {
     flexDirection: "row",
@@ -855,28 +1078,28 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   badge: {
-    paddingHorizontal: 10,
+    paddingHorizontal: spacing.sm + 2,
     paddingVertical: 4,
-    borderRadius: 8,
+    borderRadius: radius.sm,
   },
   badgeText: {
     fontSize: 11,
     fontWeight: "700",
   },
   emptyBox: {
-    backgroundColor: "#fff",
-    padding: 32,
-    borderRadius: 16,
+    backgroundColor: colors.surface,
+    padding: spacing.xxl + 4,
+    borderRadius: radius.lg,
     alignItems: "center",
-    gap: 8,
+    gap: spacing.sm,
   },
   emptyTitle: {
     fontSize: 16,
     fontWeight: "700",
-    color: "#0f172a",
+    color: colors.textPrimary,
   },
   emptyText: {
-    color: "#64748b",
+    color: colors.textSecondary,
     fontSize: 14,
     textAlign: "center",
     lineHeight: 20,
