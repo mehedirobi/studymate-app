@@ -25,12 +25,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Haptics from "expo-haptics";
 import { scheduleAssignmentReminders } from "../utils/notificationHelper";
 
-/* ------------------------------------------------------------------ */
-/* Design tokens — kept in this file so there's nothing extra to wire  */
-/* up. Same values as HomeScreen.js so the two screens stay visually   */
-/* consistent; if you add more screens later it's worth moving these   */
-/* into a shared theme.js, but not required right now.                 */
-/* ------------------------------------------------------------------ */
+
 const colors = {
   primary: "#2563eb",
   primaryDark: "#1d4ed8",
@@ -298,10 +293,7 @@ function FormField({ label, error, children }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Priority chip — icon + label, with a small checkmark badge and a    */
-/* lift/shadow when selected so the active choice is unmistakable      */
-/* ------------------------------------------------------------------ */
+
 function PriorityChip({ item, selected, onPress }) {
   const lift = useRef(new Animated.Value(selected ? 1 : 0)).current;
 
@@ -350,10 +342,7 @@ function PriorityChip({ item, selected, onPress }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Reminder card — numbered badge, entrance animation, icon-led repeat  */
-/* segmented control                                                   */
-/* ------------------------------------------------------------------ */
+
 function ReminderCard({ reminder, index, onRemove, onUpdate, onPickDateTime }) {
   const entrance = useRef(new Animated.Value(0)).current;
 
@@ -470,11 +459,7 @@ function ReminderCard({ reminder, index, onRemove, onUpdate, onPickDateTime }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Date/time picker bottom sheet — a Modal anchors to the screen, so   */
-/* it always appears centered over whatever you're looking at instead  */
-/* of wherever it happens to fall in the ScrollView layout.            */
-/* ------------------------------------------------------------------ */
+
 function PickerSheet({ visible, title, onDone, children }) {
   return (
     <Modal transparent visible={visible} animationType="slide" onRequestClose={onDone}>
@@ -599,10 +584,13 @@ export default function AddAssignmentScreen({ navigation, addAssignment }) {
 
       // Android
       if (activePicker.type === "deadline") {
-        setDeadlineDate(selectedValue || tempPickerDate);
-        closePicker();
-        return;
-      }
+  if (selectedValue) {
+    setDeadlineDate(selectedValue);
+  }
+
+  closePicker();
+  return;
+}
 
       // Android reminder — two-step: date, then time
       if (pickerStage === "date") {
