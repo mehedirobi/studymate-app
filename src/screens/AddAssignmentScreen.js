@@ -585,7 +585,12 @@ export default function AddAssignmentScreen({ navigation, addAssignment }) {
       // Android
       if (activePicker.type === "deadline") {
   if (selectedValue) {
-    setDeadlineDate(selectedValue);
+    const picked = new Date(selectedValue);
+
+    // Keep today's date valid
+    picked.setHours(23, 59, 59, 999);
+
+    setDeadlineDate(picked);
   }
 
   closePicker();
